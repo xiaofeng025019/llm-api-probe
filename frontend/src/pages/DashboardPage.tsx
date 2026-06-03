@@ -2,7 +2,37 @@ import { useNavigate } from "react-router-dom";
 import { useDashboard } from "../hooks/useDashboard";
 import { formatPercent, formatRelative, modelTypeBg, statusColor } from "../lib/format";
 import { api, type Provider } from "../api/types";
-import { Icon } from "../components/Icons";
+import {
+  IconPlus,
+  IconPlay,
+  IconRefresh,
+  IconDelete,
+  IconServer,
+  IconModels,
+  IconCheck,
+  IconAlert,
+  IconStarOutline,
+  IconTypeChat,
+  IconTypeVision,
+  IconTypeAudio,
+  IconTypeImage,
+  IconTypeEmbedding,
+  IconTypeCode,
+  KindIcon,
+} from "../components/Icons";
+import { CountUp } from "../components/CountUp";
+import { Skeleton, SkeletonProviderCard, SkeletonStat } from "../components/Skeleton";
+import { Ring } from "../components/Ring";
+import { pushToast } from "../components/Toast";
+
+const TYPE_ICONS: Record<string, React.ReactNode> = {
+  chat: <IconTypeChat />,
+  vision: <IconTypeVision />,
+  audio: <IconTypeAudio />,
+  image: <IconTypeImage />,
+  embedding: <IconTypeEmbedding />,
+  code: <IconTypeCode />,
+};
 
 export function DashboardPage() {
   const nav = useNavigate();
@@ -12,16 +42,34 @@ export function DashboardPage() {
     if (!confirm(`删除 provider ${p.name}?`)) return;
     try {
       await api.deleteProvider(p.id);
+      pushToast("ok", "已删除", p.name);
       await refresh();
     } catch (e) {
-      alert(e instanceof Error ? e.message : String(e));
+      pushToast("fail", "删除失败", e instanceof Error ? e.message : String(e));
     }
   }
 
   if (loading && !dashboard) {
     return (
-      <div className="empty-state">
-        <div className="spinner" style={{ width: 24, height: 24 }} />
+      <div>
+        <div className="page-header">
+          <div>
+            <h1>总览</h1>
+            <div className="subtitle">所有 LLM 服务商的实时可用性</div>
+          </div>
+        </div>
+        <div className="stat-grid">
+          <SkeletonStat />
+          <SkeletonStat />
+          <SkeletonStat />
+          <SkeletonStat />
+          <SkeletonStat />
+        </div>
+        <div className="provider-grid stagger">
+          <SkeletonProviderCard />
+          <SkeletonProviderCard />
+          <SkeletonProviderCard />
+        </div>
       </div>
     );
   }
@@ -35,43 +83,43 @@ export function DashboardPage() {
         </div>
       </div>
 
-      {error && <div className="error">{error}</div>}
+      {error && <div className="error" role="alert">{error}</div>}
 
       {dashboard && (
-        <div className="stat-grid">
+        <div className="stat-grid stagger">
           <StatCard
             label="Providers"
             value={dashboard.totals.providers}
-            icon={<Icon.Server />}
+            icon={<IconServer />}
             accentColor="var(--primary)"
           />
           <StatCard
             label="Models"
             value={dashboard.totals.models}
-            icon={<Icon.Models />}
+            icon={<IconModels />}
             accentColor="var(--info)"
           />
           <StatCard
             label="OK"
             value={dashboard.totals.ok}
-            icon={<Icon.Check />}
+            icon={<IconCheck />}
             accentColor="var(--ok)"
           />
           <StatCard
             label="Failing"
             value={dashboard.totals.failing}
-            icon={<Icon.Alert />}
+            icon={<IconAlert />}
             accentColor="var(--fail)"
           />
           <StatCard
             label="Favorites online"
             value={`${dashboard.totals.favorites_online} / ${dashboard.totals.favorites_total}`}
-            icon={<Icon.Star filled />}
+            icon={<IconStarOutline filled />}
             accentColor="var(--warn)"
             hint={
               dashboard.totals.favorites_total === 0
                 ? "未收藏任何模型"
-                : `${((dashboard.totals.favorites_online / Math.max(1, dashboard.totals.favorites_total)) * 100).toFixed(0)}% 在线`
+                : `${Math.round((dashboard.totals.favorites_online / Math.max(1, dashboard.totals.favorites_total)) * 100)}% 在线`
             }
           />
         </div>
@@ -81,27 +129,37 @@ export function DashboardPage() {
         <div className="section">
           <div className="section-header">
             <div className="section-title">
-              <Icon.Server />
+              <IconServer />
               Providers
             </div>
             <span className="muted">{dashboard.providers.length} 个</span>
           </div>
-          <div className="provider-grid">
+          <div className="provider-grid stagger">
             {dashboard.providers.map((p) => {
               const provider = providers.find((x) => x.id === p.provider_id);
               return (
-                <div
+                <article
                   key={p.provider_id}
                   className="provider-card"
                   style={{ ["--status-color" as string]: statusColor(p.last_status) }}
                   onClick={() => nav(`/providers/${p.provider_id}`)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      nav(`/providers/${p.provider_id}`);
+                    }
+                  }}
+                  role="button"
+                  tabIndex={0}
+                  aria-label={`${p.name}, status ${p.last_status ?? "unknown"}`}
                 >
                   <div className="head">
                     <div>
                       <div className="name">
                         <span
                           className={`status-dot ${p.last_status ?? "unknown"}`}
-                          title={p.last_status ?? "unknown"}
+                          title={`Status: ${p.last_status ?? "unknown"}`}
+                          aria-label={`Status: ${p.last_status ?? "unknown"}`}
                         />
                         {p.name}
                         {!p.enabled && (
@@ -111,7 +169,9 @@ export function DashboardPage() {
                         )}
                       </div>
                       <div className="meta">
-                        <span className="kind-badge">{p.kind}</span>
+                        <span className="kind-badge">
+                          <KindIcon kind={p.kind} /> {p.kind}
+                        </span>
                         <span style={{ marginLeft: 8 }}>
                           {p.model_count} models · {formatRelative(p.last_checked_at)}
                         </span>
@@ -141,9 +201,14 @@ export function DashboardPage() {
                     <div className="metric">
                       <div className="label">平均延迟</div>
                       <div className="value">
-                        {p.avg_latency_ms_24h != null
-                          ? `${p.avg_latency_ms_24h}ms`
-                          : "—"}
+                        {p.avg_latency_ms_24h != null ? (
+                          <>
+                            <CountUp value={p.avg_latency_ms_24h} />
+                            <span style={{ fontSize: 13, marginLeft: 2 }}>ms</span>
+                          </>
+                        ) : (
+                          "—"
+                        )}
                       </div>
                     </div>
                     <div className="metric">
@@ -157,7 +222,14 @@ export function DashboardPage() {
                     <div className="metric">
                       <div className="label">检测间隔</div>
                       <div className="value">
-                        {provider ? `${provider.interval_seconds}s` : "—"}
+                        {provider ? (
+                          <>
+                            <CountUp value={provider.interval_seconds} />
+                            <span style={{ fontSize: 13, marginLeft: 2 }}>s</span>
+                          </>
+                        ) : (
+                          "—"
+                        )}
                       </div>
                     </div>
                   </div>
@@ -165,32 +237,51 @@ export function DashboardPage() {
                   <div
                     className="actions"
                     onClick={(e) => e.stopPropagation()}
+                    onKeyDown={(e) => e.stopPropagation()}
                   >
                     <button
                       className="secondary sm"
-                      onClick={() => api.runNow(p.provider_id).then(refresh)}
+                      onClick={async () => {
+                        try {
+                          await api.runNow(p.provider_id);
+                          pushToast("info", "已触发探测", p.name);
+                        } catch (e) {
+                          pushToast("fail", "触发失败", e instanceof Error ? e.message : String(e));
+                        }
+                      }}
+                      aria-label="立即探测"
                     >
-                      <Icon.Run />
+                      <IconPlay />
                       Run
                     </button>
                     <button
                       className="secondary sm"
-                      onClick={() => api.syncModels(p.provider_id).then(refresh)}
+                      onClick={async () => {
+                        try {
+                          await api.syncModels(p.provider_id);
+                          pushToast("ok", "已同步", p.name);
+                          await refresh();
+                        } catch (e) {
+                          pushToast("fail", "同步失败", e instanceof Error ? e.message : String(e));
+                        }
+                      }}
+                      aria-label="同步模型"
                     >
-                      <Icon.Sync />
+                      <IconRefresh />
                       Sync
                     </button>
                     {provider && (
                       <button
                         className="ghost sm"
                         onClick={() => onDelete(provider)}
+                        aria-label="删除"
                         title="删除"
                       >
-                        <Icon.Delete />
+                        <IconDelete />
                       </button>
                     )}
                   </div>
-                </div>
+                </article>
               );
             })}
           </div>
@@ -198,15 +289,18 @@ export function DashboardPage() {
       )}
 
       {dashboard && dashboard.providers.length === 0 && !loading && (
-        <div className="card">
+        <div className="card fade-up">
           <div className="empty-state">
             <div className="empty-state-icon">
-              <Icon.Server />
+              <IconServer />
             </div>
             <h3>还没有 provider</h3>
             <p>在 Providers 页面添加一个 LLM 服务商开始监测。</p>
-            <button onClick={() => nav("/providers")} style={{ marginTop: 12 }}>
-              <Icon.Plus />
+            <button
+              onClick={() => nav("/providers")}
+              style={{ marginTop: 12 }}
+            >
+              <IconPlus />
               添加 Provider
             </button>
           </div>
@@ -217,22 +311,24 @@ export function DashboardPage() {
         <div className="section">
           <div className="section-header">
             <div className="section-title">
-              <Icon.Models />
+              <IconModels />
               Models
             </div>
             <span className="muted">
-              {Object.values(modelsByProvider).reduce((n, ms) => n + ms.length, 0)} 个
+              <CountUp value={Object.values(modelsByProvider).reduce((n, ms) => n + ms.length, 0)} /> 个
             </span>
           </div>
-          <div className="table-wrap">
+          <div className="table-wrap fade-up">
             <table>
               <thead>
                 <tr>
-                  <th style={{ width: 50 }}>★</th>
-                  <th>Model</th>
-                  <th>Provider</th>
-                  <th>Type</th>
-                  <th>状态</th>
+                  <th style={{ width: 50 }} scope="col">
+                    <span className="sr-only">Favorite</span>
+                  </th>
+                  <th scope="col">Model</th>
+                  <th scope="col">Provider</th>
+                  <th scope="col">Type</th>
+                  <th scope="col">状态</th>
                 </tr>
               </thead>
               <tbody>
@@ -244,13 +340,12 @@ export function DashboardPage() {
                         <button
                           className={`favorite-star ${m.is_favorite ? "active" : ""}`}
                           onClick={() =>
-                            api
-                              .patchModel(m.id, { is_favorite: !m.is_favorite })
-                              .then(refresh)
+                            api.patchModel(m.id, { is_favorite: !m.is_favorite }).then(refresh)
                           }
-                          title={m.is_favorite ? "取消收藏" : "收藏"}
+                          aria-label={m.is_favorite ? "取消收藏" : "收藏"}
+                          aria-pressed={m.is_favorite}
                         >
-                          <Icon.Star filled={m.is_favorite} />
+                          <IconStarOutline filled={m.is_favorite} />
                         </button>
                       </td>
                       <td>
@@ -268,14 +363,18 @@ export function DashboardPage() {
                         </a>
                       </td>
                       <td>
-                        <span className="type-badge" style={{ background: modelTypeBg(m.type) }}>
-                          {m.type}
+                        <span
+                          className="type-icon"
+                          style={{ background: modelTypeBg(m.type) }}
+                        >
+                          {TYPE_ICONS[m.type] ?? null}
+                          <span>{m.type}</span>
                         </span>
                       </td>
                       <td>
                         {m.enabled ? (
                           <span className="pill ok">
-                            <Icon.Check /> enabled
+                            <IconCheck /> enabled
                           </span>
                         ) : (
                           <span className="pill">disabled</span>
@@ -321,7 +420,12 @@ function StatCard({
       <div className="label">{label}</div>
       <div className="value">{value}</div>
       {hint && <div className="hint">{hint}</div>}
-      <div className="stat-icon">{icon}</div>
+      <div className="stat-icon" aria-hidden="true">
+        {icon}
+      </div>
     </div>
   );
 }
+
+// Re-export so other pages can reuse
+export { Ring };

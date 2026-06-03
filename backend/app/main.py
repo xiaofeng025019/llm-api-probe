@@ -5,10 +5,12 @@ from __future__ import annotations
 import contextlib
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.api.v1 import api_router
 from app.core.config import get_settings
@@ -70,11 +72,39 @@ async def readyz() -> dict[str, str]:
     return {"status": "ok" if sched.running else "starting"}
 
 
-# Static frontend mount (must be last; catch-all)
+# Static frontend mount (must be last; catch-all) with SPA deep-link fallback.
+# Real files in dist are served as-is; any other GET path falls back to index.html
+# so React's BrowserRouter can take over. /api/* routes are matched before this
+# mount, so they never reach here.
+class SPAStaticFiles(StaticFiles):
+    def __init__(self, *, index_path: Path, directory: str | Path | None = None, **kwargs):
+        super().__init__(directory=directory, **kwargs)
+        self.index_path = Path(index_path)
+
+    async def get_response(self, path: str, scope):  # type: ignore[override]
+        # API routes are registered as APIRouter on the same app; if a request
+        # for /api/* reaches this mount it means there is no matching route —
+        # surface a real 404 instead of the SPA index.
+        if path.startswith("api/") or path.startswith("/api/"):
+            from starlette.exceptions import HTTPException
+
+            raise HTTPException(status_code=404, detail="not found")
+        try:
+            return await super().get_response(path, scope)
+        except StarletteHTTPException as exc:
+            if exc.status_code != 404:
+                raise
+            return FileResponse(self.index_path, media_type="text/html")
+
+
 _settings = get_settings()
 _dist = _settings.frontend_dist.resolve()
 if _dist.exists():
-    app.mount("/", StaticFiles(directory=str(_dist), html=True), name="frontend")
+    app.mount(
+        "/",
+        SPAStaticFiles(directory=str(_dist), html=False, index_path=_dist / "index.html"),
+        name="frontend",
+    )
 else:
 
     @app.get("/")

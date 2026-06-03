@@ -94,12 +94,16 @@ export function SettingsPage() {
           <div className="form-grid">
             {KNOWN_KEYS.map(({ key, desc }) => (
               <div className="form-row" key={key}>
-                <label>{key}</label>
+                <label htmlFor={`setting-${key}`}>{key}</label>
                 <input
                   value={values[key] ?? ""}
                   onChange={(e) => setValues((v) => ({ ...v, [key]: e.target.value }))}
+                  id={`setting-${key}`}
+                  aria-describedby={`setting-${key}-hint`}
                 />
-                <span className="hint">{desc}</span>
+                <span className="hint" id={`setting-${key}-hint`}>
+                  {desc}
+                </span>
               </div>
             ))}
           </div>
@@ -122,7 +126,11 @@ export function SettingsPage() {
                 "保存"
               )}
             </button>
-            {msg && <span className="muted">{msg}</span>}
+            {msg && (
+              <span className="muted" role="status" aria-live="polite">
+                {msg}
+              </span>
+            )}
           </div>
           {otherSettings.length > 0 && (
             <details style={{ marginTop: 16 }}>

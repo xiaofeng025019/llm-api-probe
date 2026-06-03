@@ -84,15 +84,20 @@ export function ModelsPage() {
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             style={{ paddingLeft: 32 }}
+            aria-label="搜索模型"
+            type="search"
           />
         </div>
-        <div className="window-tabs">
+        <div className="window-tabs" role="tablist" aria-label="按类型过滤">
           {TYPES.map((t) => (
             <button
               key={t}
               className={filter === t ? "active" : ""}
               onClick={() => setFilter(t)}
               title={typeCounts[t] ? `${typeCounts[t]} 个` : ""}
+              role="tab"
+              aria-selected={filter === t}
+              aria-label={`类型 ${t}（${typeCounts[t] ?? 0} 个）`}
             >
               {t}
               {typeCounts[t] > 0 && (
@@ -114,13 +119,16 @@ export function ModelsPage() {
 
       <div className="table-wrap">
         <table>
+          <caption className="sr-only">收藏模型列表</caption>
           <thead>
             <tr>
-              <th>Provider</th>
-              <th>Model</th>
-              <th>Type</th>
-              <th>Last seen</th>
-              <th style={{ width: 120 }}></th>
+              <th scope="col">Provider</th>
+              <th scope="col">Model</th>
+              <th scope="col">Type</th>
+              <th scope="col">Last seen</th>
+              <th style={{ width: 120 }} scope="col">
+                <span className="sr-only">Actions</span>
+              </th>
             </tr>
           </thead>
           <tbody>
@@ -145,6 +153,7 @@ export function ModelsPage() {
                     onClick={() =>
                       api.patchModel(r.model_id, { is_favorite: false }).then(refresh)
                     }
+                    aria-label={`取消收藏 ${r.model}`}
                   >
                     <Icon.Star filled />
                     Unfavorite
