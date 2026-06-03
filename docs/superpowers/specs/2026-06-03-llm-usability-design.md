@@ -231,7 +231,7 @@ class Prober(Protocol):
 | `GET` | `/settings` | 取所有 |
 | `PUT` | `/settings` | 批量改 |
 | `POST` | `/export` | 导出 JSON `{providers, models, settings}`（`?include_keys=true`） |
-| `POST` | `/import` | 导入 JSON（按 `name` upsert） |
+| `POST` | `/import` | 导入 JSON（按 `name` upsert；同 name 时 `api_key` 仅在导入文件包含时覆盖，否则保留原值；`probe_results` 不导入） |
 | `GET` | `/events` | **SSE** 实时事件流 |
 | `GET` | `/healthz` | liveness |
 | `GET` | `/readyz` | DB 可写、scheduler 在跑 |
