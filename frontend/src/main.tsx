@@ -6,6 +6,7 @@ import { ProvidersPage } from "./pages/ProvidersPage";
 import { ProviderDetailPage } from "./pages/ProviderDetailPage";
 import { ModelsPage } from "./pages/ModelsPage";
 import { SettingsPage } from "./pages/SettingsPage";
+import { ThemeToggle } from "./components/ThemeToggle";
 import "./styles.css";
 
 function App() {
@@ -13,7 +14,10 @@ function App() {
     <BrowserRouter>
       <div className="app">
         <header className="topbar">
-          <h1>LLM 可用性</h1>
+          <div className="brand">
+            <div className="brand-mark">L</div>
+            <span>LLM 可用性</span>
+          </div>
           <nav>
             <NavLink to="/" end>
               Dashboard
@@ -22,6 +26,8 @@ function App() {
             <NavLink to="/models">Favorites</NavLink>
             <NavLink to="/settings">Settings</NavLink>
           </nav>
+          <div className="spacer" />
+          <ThemeToggle />
         </header>
         <main>
           <Routes>

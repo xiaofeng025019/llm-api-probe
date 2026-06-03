@@ -1,11 +1,12 @@
 import { useEffect, useState } from "react";
 import { api, Setting } from "../api/types";
+import { Icon } from "../components/Icons";
 
 const KNOWN_KEYS = [
-  "default_interval_seconds",
-  "default_timeout_seconds",
-  "max_concurrency",
-  "retention_days",
+  { key: "default_interval_seconds", desc: "默认检测间隔（秒）" },
+  { key: "default_timeout_seconds", desc: "默认超时（秒）" },
+  { key: "max_concurrency", desc: "全局最大并发探测数" },
+  { key: "retention_days", desc: "历史结果保留天数" },
 ];
 
 export function SettingsPage() {
@@ -30,7 +31,7 @@ export function SettingsPage() {
     setMsg(null);
     try {
       await api.putSettings(values);
-      setMsg("保存成功");
+      setMsg("✓ 已保存");
       await load();
     } catch (e) {
       setMsg(e instanceof Error ? e.message : String(e));
@@ -62,7 +63,7 @@ export function SettingsPage() {
         const text = await file.text();
         const payload = JSON.parse(text);
         const r = await api.importConfig(payload, includeKeys);
-        setMsg(`导入：新建 ${r.providers_created}，更新 ${r.providers_updated}`);
+        setMsg(`✓ 导入：新建 ${r.providers_created}，更新 ${r.providers_updated}`);
         await load();
       } catch (e) {
         setImportErr(e instanceof Error ? e.message : String(e));
@@ -71,51 +72,112 @@ export function SettingsPage() {
     input.click();
   }
 
+  const otherSettings = settings.filter((s) => !KNOWN_KEYS.find((k) => k.key === s.key));
+
   return (
     <div>
-      <div className="card" style={{ marginBottom: 16 }}>
-        <h2 style={{ marginTop: 0 }}>全局设置</h2>
-        {KNOWN_KEYS.map((k) => (
-          <div className="form-row" key={k}>
-            <label>{k}</label>
-            <input
-              value={values[k] ?? ""}
-              onChange={(e) => setValues((v) => ({ ...v, [k]: e.target.value }))}
-            />
-          </div>
-        ))}
-        <button onClick={save} disabled={busy}>
-          {busy ? "保存中…" : "保存"}
-        </button>
-        {msg && <span style={{ marginLeft: 12 }} className="muted">{msg}</span>}
-        <details style={{ marginTop: 12 }}>
-          <summary>其它设置 ({settings.length - KNOWN_KEYS.length})</summary>
-          <pre style={{ background: "#f3f4f6", padding: 8, fontSize: 12 }}>
-            {JSON.stringify(
-              settings.filter((s) => !KNOWN_KEYS.includes(s.key)),
-              null,
-              2,
-            )}
-          </pre>
-        </details>
+      <div className="page-header">
+        <div>
+          <h1>设置</h1>
+          <div className="subtitle">全局配置和导入导出</div>
+        </div>
       </div>
 
-      <div className="card">
-        <h2 style={{ marginTop: 0 }}>导入 / 导出</h2>
-        <p className="muted" style={{ marginTop: 0 }}>
-          配置文件是 JSON 格式，包含 providers 元信息和 settings。
-        </p>
-        <div className="row-actions">
-          <button className="secondary" onClick={() => doExport(false)}>
-            导出（不含 key）
-          </button>
-          <button onClick={() => doExport(true)}>导出（含 key）</button>
-          <button className="secondary" onClick={() => doImport(false)}>
-            导入（保留原 key）
-          </button>
-          <button onClick={() => doImport(true)}>导入（覆盖 key）</button>
+      <div className="section">
+        <div className="section-header">
+          <div className="section-title">
+            <Icon.Settings />
+            全局设置
+          </div>
         </div>
-        {importErr && <div className="error">{importErr}</div>}
+        <div className="card">
+          <div className="form-grid">
+            {KNOWN_KEYS.map(({ key, desc }) => (
+              <div className="form-row" key={key}>
+                <label>{key}</label>
+                <input
+                  value={values[key] ?? ""}
+                  onChange={(e) => setValues((v) => ({ ...v, [key]: e.target.value }))}
+                />
+                <span className="hint">{desc}</span>
+              </div>
+            ))}
+          </div>
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 12,
+              marginTop: 20,
+              paddingTop: 16,
+              borderTop: "1px solid var(--divider)",
+            }}
+          >
+            <button onClick={save} disabled={busy}>
+              {busy ? (
+                <>
+                  <span className="spinner" /> 保存中…
+                </>
+              ) : (
+                "保存"
+              )}
+            </button>
+            {msg && <span className="muted">{msg}</span>}
+          </div>
+          {otherSettings.length > 0 && (
+            <details style={{ marginTop: 16 }}>
+              <summary className="muted" style={{ cursor: "pointer" }}>
+                其它设置 ({otherSettings.length})
+              </summary>
+              <pre
+                style={{
+                  background: "var(--bg-sunken)",
+                  padding: 12,
+                  fontSize: 12,
+                  borderRadius: "var(--r-sm)",
+                  marginTop: 8,
+                  overflow: "auto",
+                }}
+              >
+                {JSON.stringify(otherSettings, null, 2)}
+              </pre>
+            </details>
+          )}
+        </div>
+      </div>
+
+      <div className="section">
+        <div className="section-header">
+          <div className="section-title">
+            <Icon.Download />
+            导入 / 导出
+          </div>
+        </div>
+        <div className="card">
+          <p className="muted" style={{ marginTop: 0 }}>
+            配置文件是 JSON 格式，包含 providers 元信息和 settings。
+          </p>
+          <div className="toolbar">
+            <button className="secondary" onClick={() => doExport(false)}>
+              <Icon.Download />
+              导出（不含 key）
+            </button>
+            <button onClick={() => doExport(true)}>
+              <Icon.Download />
+              导出（含 key）
+            </button>
+            <span className="grow" />
+            <button className="secondary" onClick={() => doImport(false)}>
+              <Icon.Upload />
+              导入（保留原 key）
+            </button>
+            <button onClick={() => doImport(true)}>
+              <Icon.Upload />
+              导入（覆盖 key）
+            </button>
+          </div>
+          {importErr && <div className="error">{importErr}</div>}
+        </div>
       </div>
     </div>
   );
