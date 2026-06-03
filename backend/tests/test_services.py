@@ -1,7 +1,7 @@
 """Service layer tests using in-memory SQLite."""
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 
 import pytest
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -162,7 +162,7 @@ async def test_disable_stale(session) -> None:
         session, p.id, [DiscoveredModel(model_id="old-1", type=ModelType.chat)]
     )
     # backdate last_seen_at
-    out[0].last_seen_at = datetime.now(timezone.utc) - timedelta(days=30)
+    out[0].last_seen_at = datetime.now() - timedelta(days=30)  # noqa: DTZ005
     await session.commit()
     n = await models_svc.disable_stale(session, days=7)
     assert n == 1
@@ -208,7 +208,7 @@ async def test_cleanup_old_removes_old_rows(session) -> None:
     old = await results_svc.record_outcome(
         session, p, None, ProbeTarget.list_models, ProbeOutcome(success=True, latency_ms=10)
     )
-    old.checked_at = datetime.now(timezone.utc) - timedelta(days=60)
+    old.checked_at = datetime.now() - timedelta(days=60)  # noqa: DTZ005
     await session.commit()
     removed = await results_svc.cleanup_old(session, retention_days=30)
     assert removed == 1

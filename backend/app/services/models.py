@@ -69,7 +69,9 @@ async def upsert_discovered(
 
 
 async def disable_stale(session: AsyncSession, days: int = 7) -> int:
-    cutoff = datetime.now(UTC) - timedelta(days=days)
+    # SQLite returns naive datetimes; compare with naive "now".
+    now = datetime.now(UTC).replace(tzinfo=None)
+    cutoff = now - timedelta(days=days)
     res = await session.execute(select(Model).where(Model.last_seen_at < cutoff, Model.enabled))
     count = 0
     for m in res.scalars().all():

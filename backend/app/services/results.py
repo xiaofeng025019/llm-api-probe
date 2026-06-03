@@ -55,7 +55,10 @@ async def list_results(
 
 
 async def cleanup_old(session: AsyncSession, retention_days: int) -> int:
-    cutoff = datetime.now(UTC) - timedelta(days=retention_days)
+    # SQLite returns naive datetimes from the column; compare with naive "now"
+    # to avoid offset-aware vs naive comparison errors.
+    now = datetime.now(UTC).replace(tzinfo=None)
+    cutoff = now - timedelta(days=retention_days)
     res = await session.execute(delete(ProbeResult).where(ProbeResult.checked_at < cutoff))
     await session.commit()
     return getattr(res, "rowcount", 0)
