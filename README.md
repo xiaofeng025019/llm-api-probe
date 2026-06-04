@@ -5,7 +5,7 @@
 > **设计稿**：[`docs/superpowers/specs/2026-06-03-llm-usability-design.md`](docs/superpowers/specs/2026-06-03-llm-usability-design.md)
 > **数据库迁移**：[`docs/superpowers/db-migrations.md`](docs/superpowers/db-migrations.md)
 >
-> **状态**：MVP — 后端 52 测试通过，前端 5 页面可运行，Docker 化 + Alembic 已就绪。
+> **状态**：MVP — 后端 62 测试通过，前端 4 页面可运行，Docker 化 + Alembic 已就绪。
 
 ## 特性
 
@@ -14,7 +14,7 @@
 - 模型类型自动推断（chat / vision / audio / image / embedding / code）
 - 收藏模型单独高亮
 - 24h / 7d / 30d 趋势图（recharts）
-- 导入 / 导出 JSON 配置（含 key 可选）
+- 导入 / 导出 JSON 配置（含 key + favorites 收藏列表）
 - SSE 实时事件流（probe.completed / provider.updated / model.updated / job.error）
 - 本地单进程单 SQLite，无外部依赖
 
@@ -75,7 +75,7 @@ cd frontend && pnpm dev   # http://localhost:5173，/api 自动代理到 :8000
 
 ```bash
 cd backend
-uv run pytest            # 52 tests
+uv run pytest            # 62 tests
 uv run ruff check app    # lint
 uv run ruff format --check app
 uv run mypy app
@@ -138,7 +138,7 @@ uv run python -m app.cli cleanup-test-data --yes  # 真的删
 | `PATCH`  | `/api/v1/models/{id}` | enabled / is_favorite |
 | `GET`    | `/api/v1/results` | 历史探测结果（`?provider_id&model_id&hours&limit`） |
 | `GET/PUT` | `/api/v1/settings` | 全局配置 |
-| `POST`   | `/api/v1/import` / `/export` | 配置导入 / 导出（`?include_keys=true` 时含明文 key） |
+| `POST`   | `/api/v1/import` / `/export` | 配置导入 / 导出（含 api_key + favorites） |
 | `POST`   | `/api/v1/probe/run` | 手动触发探测 |
 | `GET`    | `/api/v1/events` | **SSE** 实时事件 |
 

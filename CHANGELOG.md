@@ -1,0 +1,51 @@
+# Changelog
+
+## 2026-06-04
+
+### ✨ Added
+- **Dashboard 3-card layout**: OK/Failing merged into "Available Models" (model-level availability with progress bar); Favorite Models card with progress bar and "↑N vs 24h 前" delta display.
+- **Import/export favorites round-trip**: export includes `favorites_by_provider` map; import restores favorites per provider (creates placeholder model rows if needed).
+- **Alembic schema migrations**: `alembic upgrade head` runs at startup; 2 revisions (`4a7be4f2d8b0` initial, `6fe570e1adbe` UTC default).
+- **CLI management**: `uv run python -m app.cli list-providers` / `cleanup-test-data [--yes]`.
+- **e2e smoke test**: `scripts/e2e_smoke.sh` — 14 API checks against a throwaway SQLite, auto-cleanup.
+- **Dark mode** with `[data-theme="dark"]` CSS variables, persisted to localStorage.
+- **40+ inline SVG icons** (no external dependency), grouped by category.
+- **Animations**: CountUp tween, skeleton shimmer, stagger entrance, toast slide-in, ring progress spinner.
+- **Filterable providers page**: `?status=ok|fail` and `?favorites=1` via URL params.
+- **Clickable dashboard stat cards**: real `<Link>` elements (not div hacks), middle-click/right-click works.
+- **SSE toast notifications**: `job.error` events surface as push toasts.
+
+### 🔧 Changed
+- **Import/export always carries `api_key`** — the `?include_keys` query param has been removed. Export files are now self-contained backups.
+- **Provider card grid replaces the old table** on Dashboard and Providers pages.
+- **Models table removed from Dashboard** (redundant — click any provider card to see its models).
+- **`favorites_online` now uses "latest probe per model" semantics** (same as `available_models`), not "any success in window". Fixes the "Favorites all green but Available 0" inconsistency.
+- **Status filter pills use `role=toolbar` + `aria-pressed`** instead of fake `role=tablist`/`tab`.
+
+### 🐛 Fixed
+- **3 probers (openai/anthropic/gemini)**: stream error responses (401/429/5xx) now return the real error code and body instead of `StreamConsumed → ErrorCode.other`.
+- **probe_run validates `model.provider_id == provider_id`** — mismatched pairs return 400 instead of writing poisoned ProbeResult rows.
+- **useSse** stable callback via ref (no more EventSource reopen on every re-render); onerror reconnects with exponential backoff.
+- **CountUp** no longer jumps backward when value changes mid-animation.
+- **Modal dialog** focus no longer stolen by SSE-driven parent re-renders.
+- **SPA deep-link 404 leak**: `/api/v1/nonexistent` now returns real 404 instead of the SPA index.
+- **Lifespan shutdown**: `sched.shutdown(wait=True)` before `aclose_client()` (in-flight probes no longer silently swallowed).
+- **Dead code removed**: `_provider_locks` dict.
+- **All user actions now have error toast feedback** via `withErrorToast()` helper.
+
+### 📊 Test coverage
+- **62** backend tests (pytest)
+- **14/14** e2e smoke steps
+- mypy strict (31 files, 0 errors)
+- ruff clean (check + format)
+
+## 2026-06-03
+
+### ✨ Initial MVP
+- FastAPI backend with 18 REST endpoints + SSE event stream
+- 4 prober adapters: OpenAI, OpenAI-compat, Anthropic, Gemini
+- APScheduler in-process scheduling with per-provider semaphore
+- SQLite WAL storage via SQLAlchemy 2 async
+- React 18 + Vite + recharts frontend (5 pages)
+- Docker Compose deployment
+- 40 backend tests (pytest + respx)

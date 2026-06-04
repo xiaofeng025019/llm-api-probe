@@ -105,6 +105,17 @@ uv run alembic downgrade base  # 回到起点（删所有表）
 
 ## 常见操作速查
 
+### 当前迁移
+
+| Revision | 日期 | 说明 |
+|---|---|---|
+| `6fe570e1adbe` | 2026-06-04 | probe_results.checked_at server_default 改为 UTC CURRENT_TIMESTAMP |
+| `4a7be4f2d8b0` | 2026-06-04 | 初始 schema（5 张表 + 4 个索引） |
+
+当前 HEAD = `6fe570e1adbe`。
+
+### 命令
+
 | 命令 | 作用 |
 |---|---|
 | `alembic current` | 当前版本 |

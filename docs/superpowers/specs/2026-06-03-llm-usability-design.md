@@ -2,7 +2,12 @@
 
 **日期**：2026-06-03
 **项目目录**：`/home/test/xf_ws/llm_usability`
-**状态**：设计稿（待实现）
+**状态**：已实现（62 tests, mypy + ruff clean）
+
+> 以下为原始设计稿。实际实现在此基础上有以下差异：
+> - Dashboard 卡片从 5 张合并为 3 张：OK/Failing 合并为 "Available Models"（含进度条），Favorite Models 含 24h delta
+> - 导入/导出总是含 api_key（去掉了 `?include_keys` toggle），导出含 favorites_by_provider
+> - 2 个 alembic 迁移：`4a7be4f2d8b0` (initial) + `6fe570e1adbe` (UTC default)
 
 ## 1. 目标与范围
 
