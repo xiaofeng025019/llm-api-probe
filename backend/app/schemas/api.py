@@ -123,6 +123,10 @@ class DashboardFavoriteModel(BaseModel):
     error_code: ErrorCode | None
     error_message: str | None
     availability_24h: float | None
+    samples_24h: int = 0
+    p95_latency_ms_24h: int | None = None
+    p95_ttfb_ms_24h: int | None = None
+    consecutive_failures: int = 0
 
 
 class DashboardProvider(BaseModel):
@@ -135,6 +139,15 @@ class DashboardProvider(BaseModel):
     last_status: str | None
     availability_24h: float | None
     avg_latency_ms_24h: int | None
+    p95_latency_ms_24h: int | None = None
+    p95_ttfb_ms_24h: int | None = None
+    samples_24h: int = 0
+    failures_24h: int = 0
+    error_counts_24h: dict[str, int] = Field(default_factory=dict)
+    list_models_status: str | None = None
+    list_models_latency_ms: int | None = None
+    list_models_checked_at: datetime | None = None
+    list_models_error_code: ErrorCode | None = None
     available_models_online: int
     favorite_models_online: int
     favorite_models_total: int

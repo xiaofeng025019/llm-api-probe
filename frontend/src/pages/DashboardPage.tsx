@@ -17,7 +17,6 @@ import {
   IconActivity,
   IconClock,
 } from "../components/Icons";
-import { CountUp } from "../components/CountUp";
 import { Skeleton, SkeletonProviderCard, SkeletonStat } from "../components/Skeleton";
 import { pushToast } from "../components/Toast";
 import { ProviderDialog } from "./ProvidersPage";
@@ -48,6 +47,12 @@ function modelStatusLabel(model: DashboardFavoriteModel): string {
   if (model.status === "ok") return "online";
   if (model.status === "fail") return "failing";
   return "unknown";
+}
+
+function errorSummary(counts: Record<string, number>): string {
+  const entries = Object.entries(counts).sort((a, b) => b[1] - a[1]);
+  if (entries.length === 0) return "无错误";
+  return entries.map(([code, count]) => `${code} ${count}`).join(" · ");
 }
 
 export function DashboardPage() {
@@ -204,6 +209,9 @@ export function DashboardPage() {
                       </div>
                       <div className="dashboard-monitoring-line">
                         <span className="pill ok">Monitoring on</span>
+                        <span className={`pill ${p.list_models_status ?? "unknown"}`}>
+                          List {p.list_models_status ?? "unknown"}
+                        </span>
                         <span className="muted">{statusIntervalLabel}</span>
                         {isRunning && <span className="pill info">状态检测已排队</span>}
                       </div>
@@ -232,22 +240,30 @@ export function DashboardPage() {
                           </div>
                         </div>
                         <div className="metric">
-                          <div className="label">平均延迟</div>
+                          <div className="label">P95 延迟</div>
+                          <div className="value">{formatMs(p.p95_latency_ms_24h)}</div>
+                        </div>
+                        <div className="metric">
+                          <div className="label">P95 TTFB</div>
+                          <div className="value">{formatMs(p.p95_ttfb_ms_24h)}</div>
+                        </div>
+                        <div className="metric">
+                          <div className="label">样本 / 失败</div>
+                          <div className="value">{p.samples_24h} / {p.failures_24h}</div>
+                        </div>
+                        <div className="metric dashboard-wide-metric">
+                          <div className="label">Model List</div>
                           <div className="value">
-                            {p.avg_latency_ms_24h != null ? (
+                            {p.list_models_status ? (
                               <>
-                                <CountUp value={p.avg_latency_ms_24h} />
-                                <span style={{ fontSize: 13, marginLeft: 2 }}>ms</span>
+                                {p.list_models_status}
+                                <span className="metric-subvalue">
+                                  {formatMs(p.list_models_latency_ms)} · {formatRelative(p.list_models_checked_at)}
+                                </span>
                               </>
                             ) : (
                               "—"
                             )}
-                          </div>
-                        </div>
-                        <div className="metric">
-                          <div className="label">模型状态检测</div>
-                          <div className="value">
-                            {statusIntervalValue}
                           </div>
                         </div>
                         <div className="metric dashboard-wide-metric">
@@ -264,6 +280,12 @@ export function DashboardPage() {
                             {p.favorite_models_total > 0
                               ? `${p.favorite_models_online} / ${p.favorite_models_total}`
                               : "—"}
+                          </div>
+                        </div>
+                        <div className="metric dashboard-wide-metric">
+                          <div className="label">Errors 24h</div>
+                          <div className="value metric-compact-value">
+                            {errorSummary(p.error_counts_24h)}
                           </div>
                         </div>
                       </div>
@@ -467,6 +489,7 @@ function FavoriteModelStatus({
         <div className="favorite-model-meta">
           <span className="favorite-model-type">{model.type}</span>
           <span>{formatRelative(model.last_checked_at)}</span>
+          <span>{model.samples_24h} samples</span>
           {model.error_code && <span className="favorite-model-error">{model.error_code}</span>}
         </div>
       </div>
@@ -479,16 +502,20 @@ function FavoriteModelStatus({
         <div>
           <span>
             <IconClock />
-            Lat
+            P95
           </span>
-          <strong>{formatMs(model.latency_ms)}</strong>
+          <strong>{formatMs(model.p95_latency_ms_24h)}</strong>
         </div>
         <div>
           <span>
             <IconActivity />
             TTFB
           </span>
-          <strong>{formatMs(model.ttfb_ms)}</strong>
+          <strong>{formatMs(model.p95_ttfb_ms_24h)}</strong>
+        </div>
+        <div>
+          <span>Fails</span>
+          <strong>{model.consecutive_failures}</strong>
         </div>
       </div>
 

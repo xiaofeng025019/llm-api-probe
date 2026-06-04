@@ -19,6 +19,7 @@ async def record_outcome(
     target: ProbeTarget,
     outcome: ProbeOutcome,
 ) -> ProbeResult:
+    model = await session.get(Model, model_db_id) if model_db_id is not None else None
     row = ProbeResult(
         provider_id=provider.id,
         model_id=model_db_id,
@@ -29,6 +30,8 @@ async def record_outcome(
         ttfb_ms=outcome.ttfb_ms,
         error_code=outcome.error_code,
         error_message=(outcome.error_message[:1000] if outcome.error_message else None),
+        provider_name_at_probe=provider.name,
+        model_id_at_probe=model.model_id if model else None,
     )
     session.add(row)
     await session.commit()
@@ -94,6 +97,33 @@ def _provider_health_status(
     return None
 
 
+def _p95_ms(rows: list[ProbeResult], field: str) -> int | None:
+    values = sorted(int(value) for row in rows if (value := getattr(row, field)) is not None)
+    if not values:
+        return None
+    index = max(0, min(len(values) - 1, int((len(values) * 0.95) + 0.999999) - 1))
+    return values[index]
+
+
+def _error_counts(rows: list[ProbeResult]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for row in rows:
+        if row.success or row.error_code is None:
+            continue
+        key = row.error_code.value
+        counts[key] = counts.get(key, 0) + 1
+    return counts
+
+
+def _consecutive_failures(rows_desc: list[ProbeResult]) -> int:
+    count = 0
+    for row in rows_desc:
+        if row.success:
+            break
+        count += 1
+    return count
+
+
 async def dashboard(session: AsyncSession) -> DashboardOut:
     now = datetime.now(UTC)
     cutoff_24h = now - timedelta(hours=24)
@@ -106,22 +136,32 @@ async def dashboard(session: AsyncSession) -> DashboardOut:
     # on every SQLite version without ROW_NUMBER().
     recent_per_model: dict[int, bool] = {}
     recent_counts_by_model: dict[int, tuple[int, int]] = {}
-    rows = (
-        await session.execute(
-            select(ProbeResult.model_id, ProbeResult.success, ProbeResult.checked_at)
-            .where(ProbeResult.model_id.is_not(None), ProbeResult.checked_at >= cutoff_24h)
-            .order_by(ProbeResult.checked_at.desc())
+    recent_results_by_model: dict[int, list[ProbeResult]] = {}
+    recent_results_by_provider: dict[int, list[ProbeResult]] = {}
+    recent_rows = (
+        (
+            await session.execute(
+                select(ProbeResult)
+                .where(ProbeResult.checked_at >= cutoff_24h)
+                .order_by(ProbeResult.checked_at.desc())
+            )
         )
-    ).all()
-    for model_id, success, _ in rows:
+        .scalars()
+        .all()
+    )
+    for row in recent_rows:
+        recent_results_by_provider.setdefault(row.provider_id, []).append(row)
+        model_id = row.model_id
         if model_id is None:
             continue
         total, succeeded = recent_counts_by_model.get(model_id, (0, 0))
-        recent_counts_by_model[model_id] = (total + 1, succeeded + (1 if success else 0))
+        recent_counts_by_model[model_id] = (total + 1, succeeded + (1 if row.success else 0))
+        recent_results_by_model.setdefault(model_id, []).append(row)
         if model_id not in recent_per_model:
-            recent_per_model[model_id] = bool(success)
+            recent_per_model[model_id] = bool(row.success)
 
     latest_by_model: dict[int, ProbeResult] = {}
+    results_by_model: dict[int, list[ProbeResult]] = {}
     latest_rows = (
         (
             await session.execute(
@@ -134,9 +174,11 @@ async def dashboard(session: AsyncSession) -> DashboardOut:
         .all()
     )
     for row in latest_rows:
-        if row.model_id is None or row.model_id in latest_by_model:
+        if row.model_id is None:
             continue
-        latest_by_model[row.model_id] = row
+        results_by_model.setdefault(row.model_id, []).append(row)
+        if row.model_id not in latest_by_model:
+            latest_by_model[row.model_id] = row
 
     # Pre-24h snapshot for the Favorite Models delta: which favorites
     # were online (latest success) at the time the 24h window started?
@@ -207,6 +249,7 @@ async def dashboard(session: AsyncSession) -> DashboardOut:
         if cnt and cnt > 0:
             avail = round((succ or 0) / cnt * 100, 2)
         avg_lat_ms = int(avg_lat) if avg_lat is not None else None
+        provider_recent_results = recent_results_by_provider.get(p.id, [])
         enabled_models = [m for m in models if m.enabled]
         provider_status = _provider_health_status(
             provider_enabled=p.enabled,
@@ -227,6 +270,7 @@ async def dashboard(session: AsyncSession) -> DashboardOut:
         for m in favorites:
             latest = latest_by_model.get(m.id)
             recent_total, recent_success = recent_counts_by_model.get(m.id, (0, 0))
+            model_recent_results = recent_results_by_model.get(m.id, [])
             availability_24h = round(recent_success / recent_total * 100, 2) if recent_total > 0 else None
             favorite_models.append(
                 DashboardFavoriteModel(
@@ -242,6 +286,10 @@ async def dashboard(session: AsyncSession) -> DashboardOut:
                     error_code=latest.error_code if latest else None,
                     error_message=latest.error_message if latest else None,
                     availability_24h=availability_24h,
+                    samples_24h=recent_total,
+                    p95_latency_ms_24h=_p95_ms(model_recent_results, "latency_ms"),
+                    p95_ttfb_ms_24h=_p95_ms(model_recent_results, "ttfb_ms"),
+                    consecutive_failures=_consecutive_failures(results_by_model.get(m.id, [])),
                 )
             )
 
@@ -256,6 +304,21 @@ async def dashboard(session: AsyncSession) -> DashboardOut:
                 last_status=provider_status,
                 availability_24h=avail,
                 avg_latency_ms_24h=avg_lat_ms,
+                p95_latency_ms_24h=_p95_ms(provider_recent_results, "latency_ms"),
+                p95_ttfb_ms_24h=_p95_ms(provider_recent_results, "ttfb_ms"),
+                samples_24h=int(cnt or 0),
+                failures_24h=int((cnt or 0) - (succ or 0)),
+                error_counts_24h=_error_counts(provider_recent_results),
+                list_models_status=(
+                    "ok"
+                    if latest_list_models and latest_list_models.success
+                    else "fail"
+                    if latest_list_models
+                    else None
+                ),
+                list_models_latency_ms=latest_list_models.latency_ms if latest_list_models else None,
+                list_models_checked_at=latest_list_models.checked_at if latest_list_models else None,
+                list_models_error_code=latest_list_models.error_code if latest_list_models else None,
                 available_models_online=available_models_online,
                 favorite_models_online=online,
                 favorite_models_total=len(favorites),

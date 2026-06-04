@@ -46,6 +46,10 @@ export interface DashboardFavoriteModel {
   error_code: string | null;
   error_message: string | null;
   availability_24h: number | null;
+  samples_24h: number;
+  p95_latency_ms_24h: number | null;
+  p95_ttfb_ms_24h: number | null;
+  consecutive_failures: number;
 }
 
 export interface DashboardProvider {
@@ -58,6 +62,15 @@ export interface DashboardProvider {
   last_status: "ok" | "degraded" | "fail" | null;
   availability_24h: number | null;
   avg_latency_ms_24h: number | null;
+  p95_latency_ms_24h: number | null;
+  p95_ttfb_ms_24h: number | null;
+  samples_24h: number;
+  failures_24h: number;
+  error_counts_24h: Record<string, number>;
+  list_models_status: "ok" | "fail" | null;
+  list_models_latency_ms: number | null;
+  list_models_checked_at: string | null;
+  list_models_error_code: string | null;
   available_models_online: number;
   favorite_models_online: number;
   favorite_models_total: number;

@@ -4,6 +4,8 @@ import { api, ModelOut, ProbeResult, Provider, Setting } from "../api/types";
 import { withErrorToast } from "../lib/action";
 import {
   formatMs,
+  formatPercent,
+  parseApiDate,
   formatRelative,
   formatTime,
   modelTypeColor,
@@ -19,6 +21,8 @@ import {
   IconClock,
   IconActivity,
   IconChart,
+  IconGauge,
+  IconHash,
   IconRefresh,
   IconPlay,
   IconProbe,
@@ -32,6 +36,24 @@ const WINDOWS: Array<{ label: string; hours: number }> = [
   { label: "7d", hours: 24 * 7 },
   { label: "30d", hours: 24 * 30 },
 ];
+
+function p95(values: Array<number | null | undefined>): number | null {
+  const nums = values
+    .filter((v): v is number => v != null && Number.isFinite(v))
+    .sort((a, b) => a - b);
+  if (nums.length === 0) return null;
+  const index = Math.max(0, Math.min(nums.length - 1, Math.ceil(nums.length * 0.95) - 1));
+  return nums[index];
+}
+
+function consecutiveFailures(rowsDesc: ProbeResult[]): number {
+  let count = 0;
+  for (const row of rowsDesc) {
+    if (row.success) break;
+    count += 1;
+  }
+  return count;
+}
 
 export function ProviderDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -86,6 +108,36 @@ export function ProviderDetailPage() {
     return byModel;
   }, [modelStatusResults]);
 
+  const modelQualityById = useMemo(() => {
+    const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+    const grouped = new Map<number, ProbeResult[]>();
+    for (const r of modelStatusResults) {
+      if (r.model_id == null || r.target !== "chat_completion") continue;
+      const rows = grouped.get(r.model_id) ?? [];
+      rows.push(r);
+      grouped.set(r.model_id, rows);
+    }
+    return new Map(
+      [...grouped.entries()].map(([modelId, rows]) => {
+        const sorted = [...rows].sort(
+          (a, b) => parseApiDate(b.checked_at).getTime() - parseApiDate(a.checked_at).getTime(),
+        );
+        const recent = sorted.filter((r) => parseApiDate(r.checked_at).getTime() >= cutoff);
+        const successes = recent.filter((r) => r.success).length;
+        return [
+          modelId,
+          {
+            samples24h: recent.length,
+            availability24h: recent.length > 0 ? (successes / recent.length) * 100 : null,
+            p95Latency: p95(recent.map((r) => r.latency_ms)),
+            p95Ttfb: p95(recent.map((r) => r.ttfb_ms)),
+            consecutiveFailures: consecutiveFailures(sorted),
+          },
+        ];
+      }),
+    );
+  }, [modelStatusResults]);
+
   // keyboard: arrow keys on window tabs
   function onWindowKey(e: React.KeyboardEvent, idx: number) {
     if (e.key === "ArrowRight" || e.key === "ArrowDown") {
@@ -125,6 +177,9 @@ export function ProviderDetailPage() {
           .reduce((a, r) => a + (r.latency_ms ?? 0), 0) /
         Math.max(1, results.filter((r) => r.success).length)
       : null;
+  const failures = results.length - successes;
+  const p95Latency = p95(results.map((r) => r.latency_ms));
+  const p95Ttfb = p95(results.map((r) => r.ttfb_ms));
   const statusIntervalLabel = modelStatusIntervalLabel(settings);
 
   return (
@@ -242,6 +297,22 @@ export function ProviderDetailPage() {
           value={formatMs(avgLatency)}
           icon={<IconClock />}
         />
+        <Stat
+          label={`${window_.label} P95 延迟`}
+          value={formatMs(p95Latency)}
+          icon={<IconGauge />}
+        />
+        <Stat
+          label={`${window_.label} P95 TTFB`}
+          value={formatMs(p95Ttfb)}
+          icon={<IconActivity />}
+        />
+        <Stat
+          label={`${window_.label} 样本`}
+          value={`${results.length} / ${failures}`}
+          hint="总数 / 失败"
+          icon={<IconHash />}
+        />
       </div>
 
       <div className="card section fade-up">
@@ -297,8 +368,13 @@ export function ProviderDetailPage() {
                 <th scope="col">Type</th>
                 <th scope="col">Enabled</th>
                 <th scope="col">Last probe</th>
+                <th scope="col">24h</th>
+                <th scope="col">Samples</th>
                 <th scope="col">Latency</th>
                 <th scope="col">TTFB</th>
+                <th scope="col">P95 Lat</th>
+                <th scope="col">P95 TTFB</th>
+                <th scope="col">Failures</th>
                 <th scope="col">Last seen</th>
                 <th style={{ width: 100 }} scope="col">
                   <span className="sr-only">Actions</span>
@@ -308,6 +384,7 @@ export function ProviderDetailPage() {
             <tbody>
               {models.map((m) => {
                 const latest = latestResultByModel.get(m.id);
+                const quality = modelQualityById.get(m.id);
                 const status = !m.enabled ? "disabled" : latest?.success ? "ok" : latest ? "fail" : "unknown";
                 return (
                   <tr key={m.id}>
@@ -379,8 +456,17 @@ export function ProviderDetailPage() {
                         "—"
                       )}
                     </td>
+                    <td className="mono">{formatPercent(quality?.availability24h)}</td>
+                    <td className="mono">{quality?.samples24h ?? 0}</td>
                     <td className="mono">{formatMs(latest?.latency_ms ?? null)}</td>
                     <td className="mono">{formatMs(latest?.ttfb_ms ?? null)}</td>
+                    <td className="mono">{formatMs(quality?.p95Latency)}</td>
+                    <td className="mono">{formatMs(quality?.p95Ttfb)}</td>
+                    <td>
+                      <span className={`pill ${quality?.consecutiveFailures ? "warn" : "ok"}`}>
+                        {quality?.consecutiveFailures ?? 0}
+                      </span>
+                    </td>
                     <td className="muted">
                       <span title={formatTime(m.last_seen_at)}>
                         {formatRelative(m.last_seen_at)}
@@ -404,7 +490,7 @@ export function ProviderDetailPage() {
               })}
               {models.length === 0 && (
                 <tr>
-                  <td colSpan={10}>
+                  <td colSpan={15}>
                     <div className="empty-state">
                       <p>没有模型。点 “更新模型清单” 拉取。</p>
                     </div>

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { api, Provider, ProviderKind } from "../api/types";
 import { useDashboard } from "../hooks/useDashboard";
-import { formatRelative, statusColor } from "../lib/format";
+import { formatMs, formatRelative, statusColor } from "../lib/format";
 import { modelStatusIntervalLabel } from "../lib/settings";
 import { Icon } from "../components/Icons";
 import { withErrorToast } from "../lib/action";
@@ -10,6 +10,12 @@ import { pushToast } from "../components/Toast";
 
 type StatusFilter = "all" | "ok" | "fail";
 type FavoriteFilter = "all" | "favorites";
+
+function errorSummary(counts: Record<string, number>): string {
+  const entries = Object.entries(counts).sort((a, b) => b[1] - a[1]);
+  if (entries.length === 0) return "无错误";
+  return entries.map(([code, count]) => `${code} ${count}`).join(" · ");
+}
 
 export function ProvidersPage() {
   const nav = useNavigate();
@@ -304,9 +310,28 @@ export function ProvidersPage() {
                       </div>
                     </div>
                     <div className="metric">
-                      <div className="label">最近</div>
+                      <div className="label">P95 延迟</div>
+                      <div className="value">{formatMs(dash.p95_latency_ms_24h)}</div>
+                    </div>
+                    <div className="metric">
+                      <div className="label">样本 / 失败</div>
+                      <div className="value">
+                        {dash.samples_24h} / {dash.failures_24h}
+                      </div>
+                    </div>
+                    <div className="metric">
+                      <div className="label">Model List</div>
                       <div className="value" style={{ fontSize: 14 }}>
-                        {formatRelative(dash.last_checked_at)}
+                        {dash.list_models_status ?? "—"}
+                        <span className="metric-subvalue">
+                          {formatMs(dash.list_models_latency_ms)} · {formatRelative(dash.list_models_checked_at)}
+                        </span>
+                      </div>
+                    </div>
+                    <div className="metric provider-error-metric">
+                      <div className="label">Errors 24h</div>
+                      <div className="value metric-compact-value">
+                        {errorSummary(dash.error_counts_24h)}
                       </div>
                     </div>
                   </div>

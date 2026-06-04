@@ -329,6 +329,8 @@ async def test_dashboard_includes_favorite_model_status_details(session) -> None
             error_code=ErrorCode.server,
             error_message="server failed",
             checked_at=base_now,
+            provider_name_at_probe=p.name,
+            model_id_at_probe=fav.model_id,
         )
     )
     session.add(
@@ -341,6 +343,8 @@ async def test_dashboard_includes_favorite_model_status_details(session) -> None
             latency_ms=120,
             ttfb_ms=40,
             checked_at=base_now + timedelta(seconds=1),
+            provider_name_at_probe=p.name,
+            model_id_at_probe=fav.model_id,
         )
     )
     session.add(
@@ -351,6 +355,8 @@ async def test_dashboard_includes_favorite_model_status_details(session) -> None
             success=True,
             latency_ms=50,
             checked_at=base_now + timedelta(seconds=2),
+            provider_name_at_probe=p.name,
+            model_id_at_probe=other.model_id,
         )
     )
     await session.commit()
@@ -363,6 +369,10 @@ async def test_dashboard_includes_favorite_model_status_details(session) -> None
     assert favorite_models[0].latency_ms == 120
     assert favorite_models[0].ttfb_ms == 40
     assert favorite_models[0].availability_24h == 50
+    assert favorite_models[0].samples_24h == 2
+    assert favorite_models[0].p95_latency_ms_24h == 220
+    assert favorite_models[0].p95_ttfb_ms_24h == 70
+    assert favorite_models[0].consecutive_failures == 0
 
 
 @pytest.mark.asyncio
@@ -390,6 +400,11 @@ async def test_dashboard_provider_health_uses_provider_and_model_signals(session
 
     dash = await results_svc.dashboard(session)
     assert dash.providers[0].last_status == "degraded"
+    assert dash.providers[0].samples_24h == 3
+    assert dash.providers[0].failures_24h == 1
+    assert dash.providers[0].p95_latency_ms_24h == 10
+    assert dash.providers[0].list_models_status == "ok"
+    assert dash.providers[0].list_models_latency_ms == 10
     assert dash.totals["degraded"] == 1
     assert dash.totals["ok"] == 0
     assert dash.totals["failing"] == 0
@@ -408,11 +423,17 @@ async def test_dashboard_provider_health_fails_when_list_models_fails(session) -
         session, p, m.id, ProbeTarget.chat_completion, ProbeOutcome(success=True, latency_ms=10)
     )
     await results_svc.record_outcome(
-        session, p, None, ProbeTarget.list_models, ProbeOutcome(success=False, latency_ms=10)
+        session,
+        p,
+        None,
+        ProbeTarget.list_models,
+        ProbeOutcome(success=False, latency_ms=10, error_code=ErrorCode.other),
     )
 
     dash = await results_svc.dashboard(session)
     assert dash.providers[0].last_status == "fail"
+    assert dash.providers[0].list_models_status == "fail"
+    assert dash.providers[0].error_counts_24h == {"other": 1}
     assert dash.totals["failing"] == 1
 
 
@@ -451,6 +472,8 @@ async def test_dashboard_favorites_delta_24h_ago(session) -> None:
             success=True,
             latency_ms=10,
             checked_at=base_old,
+            provider_name_at_probe=p.name,
+            model_id_at_probe=ms[0].model_id,
         )
     )
     session.add(
@@ -461,6 +484,8 @@ async def test_dashboard_favorites_delta_24h_ago(session) -> None:
             success=True,
             latency_ms=10,
             checked_at=base_old,
+            provider_name_at_probe=p.name,
+            model_id_at_probe=ms[1].model_id,
         )
     )
     session.add(
@@ -471,6 +496,8 @@ async def test_dashboard_favorites_delta_24h_ago(session) -> None:
             success=True,
             latency_ms=10,
             checked_at=base_now,
+            provider_name_at_probe=p.name,
+            model_id_at_probe=ms[0].model_id,
         )
     )
     session.add(
@@ -481,6 +508,8 @@ async def test_dashboard_favorites_delta_24h_ago(session) -> None:
             success=False,
             latency_ms=10,
             checked_at=base_now + timedelta(seconds=1),
+            provider_name_at_probe=p.name,
+            model_id_at_probe=ms[1].model_id,
         )
     )
     await session.commit()

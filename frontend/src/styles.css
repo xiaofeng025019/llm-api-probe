@@ -978,6 +978,10 @@ tbody tr:last-child td {
   letter-spacing: -0.01em;
 }
 
+.provider-error-metric {
+  grid-column: 1 / -1;
+}
+
 .provider-card .actions {
   display: flex;
   gap: 6px;
@@ -993,7 +997,7 @@ tbody tr:last-child td {
 
 .dashboard-provider-card {
   padding: 20px;
-  max-height: 680px;
+  max-height: 760px;
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -1180,6 +1184,22 @@ tbody tr:last-child td {
   border-radius: var(--r-sm);
   background: var(--surface-2);
   border: 1px solid var(--divider);
+}
+
+.metric-subvalue {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.2;
+}
+
+.metric-compact-value {
+  font-size: 14px !important;
+  line-height: 1.35;
+  color: var(--text-secondary);
+  word-break: break-word;
 }
 
 .dashboard-provider-card .dashboard-wide-metric {
@@ -1371,9 +1391,9 @@ tbody tr:last-child td {
 
 .favorite-model-stats {
   display: grid;
-  grid-template-columns: repeat(3, minmax(52px, 1fr));
+  grid-template-columns: repeat(4, minmax(52px, 1fr));
   gap: 6px;
-  min-width: 188px;
+  min-width: 240px;
 }
 
 .favorite-model-stats > div {
