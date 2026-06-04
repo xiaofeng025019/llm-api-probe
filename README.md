@@ -1,161 +1,193 @@
-# LLM 可用性检测服务
+# LLM Usability
 
-本地部署的 LLM API 服务商可用性检测服务。浏览器查看各服务商与模型的实时状态，对收藏模型重点监测。
+Local LLM API provider availability monitor. Browser dashboard for real-time status of every provider and model, with focused monitoring of your favorites and 24h / 7d / 30d trend charts.
 
-> **设计稿**：[`docs/superpowers/specs/2026-06-03-llm-usability-design.md`](docs/superpowers/specs/2026-06-03-llm-usability-design.md)
-> **数据库迁移**：[`docs/superpowers/db-migrations.md`](docs/superpowers/db-migrations.md)
->
-> **状态**：MVP — 后端 67 测试通过，前端 4 页面可运行，Docker 化 + Alembic 已就绪。
+![Dashboard preview](docs/screenshots/dashboard.png)
 
-## 特性
+## Highlights
 
-- 支持 OpenAI、OpenAI 兼容（DeepSeek / 硅基流动 / 豆包等）、Anthropic、Google Gemini 四类 provider
-- 定时主动探测：list_models + 流式 chat_completion，记录状态、延迟、TTFB、错误码
-- 模型类型自动推断（chat / vision / audio / image / embedding / code）
-- 收藏模型单独高亮
-- 24h / 7d / 30d 趋势图（recharts）
-- 导入 / 导出 JSON 配置（含 key + favorites 收藏列表）
-- 软删除 Provider / Model（删除后可同名重建，导入可恢复）
-- 探测结果快照字段（provider_name_at_probe / model_id_at_probe），历史数据不随主表变更失真
-- UUID 外部 ID（API 全部使用 UUID，内部仍用整数 FK 保证性能）
-- SSE 实时事件流（probe.completed / provider.updated / model.updated / job.error）
-- 本地单进程单 SQLite，无外部依赖
+- **Multi-provider**: OpenAI, OpenAI-compatible (DeepSeek / 硅基流动 / 豆包 / …), Anthropic, Google Gemini
+- **Active probing**: `list_models` + streaming `chat_completion`, recording status, latency, TTFB, error code
+- **Favorites**: pin the models you care about; gets a faster probe interval
+- **Trend charts**: 1h / 24h / 7d / 30d windows (Recharts)
+- **Import / Export**: JSON config with API keys + favorites, full round-trip
+- **SSE event stream**: `probe.completed` / `provider.updated` / `model.updated` / `job.error` (auto-reconnect, exponential backoff)
+- **Local-first**: single SQLite file, no external services, bound to `127.0.0.1` by default
 
-## 技术栈
+> Design spec: [`docs/superpowers/specs/2026-06-03-llm-usability-design.md`](docs/superpowers/specs/2026-06-03-llm-usability-design.md)
+> Architecture: [`docs/architecture.md`](docs/architecture.md)
+> API reference: [`docs/api.md`](docs/api.md)
+> Changelog: [`CHANGELOG.md`](CHANGELOG.md)
 
-- **后端**：Python 3.12 / FastAPI / SQLAlchemy 2 async / APScheduler 3 / httpx / pydantic v2 / loguru / uvicorn
-- **存储**：SQLite WAL
-- **前端**：React 18 + Vite + TypeScript + react-router v6 + recharts
-- **包管理**：`uv`（后端）+ `pnpm`（前端）
-- **质量**：ruff / mypy / pytest + respx
+## Quick start
 
-## 启动
-
-### 方式 A：Docker Compose（推荐）
+### Docker Compose (recommended)
 
 ```bash
-cp .env.example .env   # 可选，按需修改
+git clone <repo-url> llm-usability
+cd llm-usability
+cp .env.example .env          # optional
 docker compose up -d
-# 浏览器打开 http://127.0.0.1:8000
+# open http://127.0.0.1:8000
 ```
 
-数据持久化在 `./data/llm_usability.db`，调度任务也存于同一文件。
+Data persists in `./data/llm_usability.db`; scheduler state in the same file.
 
-### 方式 B：本地裸跑
+### Bare metal
 
 ```bash
-# 后端
+# Backend
 cd backend
 uv sync
-cd ..
 
-# 前端
-cd frontend
+# Frontend
+cd ../frontend
 pnpm install
 pnpm build
 cd ..
 
-# 启动
+# Run
 cd backend
 uv run uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
-### 方式 C：开发态（前后端分离热更新）
+### Development mode (hot reload)
 
 ```bash
-# 终端 1
+# Terminal 1
 cd backend && uv run uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
 
-# 终端 2
-cd frontend && pnpm dev   # http://localhost:5173，/api 自动代理到 :8000
+# Terminal 2
+cd frontend && pnpm dev
+# Vite at http://localhost:5173, proxies /api to :8000
 ```
 
-## 配置
+## Screenshots
 
-所有配置走 `.env`（参考 `.env.example`）。运行期可改项（`retention_days` / `max_concurrency` 等）落 `settings` 表，UI 在 **Settings** 页改。
+| Dashboard | Provider detail |
+| --- | --- |
+| ![Dashboard](docs/screenshots/dashboard.png) | ![Provider detail](docs/screenshots/provider.png) |
 
-## 测试
+| Models (favorites) | Settings |
+| --- | --- |
+| ![Models](docs/screenshots/models.png) | ![Settings](docs/screenshots/settings.png) |
+
+> Tip: drop real screenshots into `docs/screenshots/` after running locally.
+
+## Tech stack
+
+| Layer | Stack |
+| --- | --- |
+| Backend | Python 3.12, FastAPI, SQLAlchemy 2 (async), Alembic, APScheduler, httpx, Pydantic v2, loguru, uvicorn |
+| Storage | SQLite WAL (`sqlite+aiosqlite://`) |
+| Frontend | React 18, Vite, TypeScript, react-router v6, Recharts, Geist Sans/Mono |
+| Tooling | `uv` (backend), `pnpm` (frontend), ruff, mypy, pytest, respx |
+| Deploy | Single-container Docker Compose |
+
+## Project layout
+
+```
+llm_usability/
+├── backend/             # FastAPI app
+│   ├── app/
+│   │   ├── api/         # REST endpoints
+│   │   ├── core/        # config, scheduler, SSE
+│   │   ├── db/          # models, sessions, UUID helpers
+│   │   ├── probers/     # LLM provider adapters
+│   │   ├── schemas/     # Pydantic schemas
+│   │   └── services/    # business logic
+│   ├── alembic/         # DB migrations
+│   ├── scripts/         # e2e smoke
+│   └── tests/           # pytest suite (67 tests)
+├── frontend/            # React + Vite
+│   └── src/
+│       ├── api/         # typed fetch wrapper
+│       ├── components/  # shared UI
+│       ├── hooks/       # useDashboard, useSse, useTheme
+│       ├── lib/         # formatters, actions
+│       └── pages/       # route components
+├── docs/                # architecture, API, design spec
+├── .github/             # CI workflow, issue + PR templates
+├── docker-compose.yml
+├── Dockerfile.backend
+├── .env.example
+├── AGENTS.md            # repo-wide agent guidelines
+├── CONTRIBUTING.md
+├── CODE_OF_CONDUCT.md
+├── SECURITY.md
+└── LICENSE
+```
+
+## Configuration
+
+All config comes from `.env` (template: `.env.example`). Runtime-tunable values
+(`retention_days`, `max_concurrency`, favorite / regular model intervals) live in
+the `settings` table and are editable from the **Settings** page.
+
+## API overview
+
+All endpoints under `/api/v1`. Response envelope: `{data, error}`.
+
+| Method | Path | Notes |
+| --- | --- |
+| `GET`    | `/healthz` / `/readyz` | liveness / readiness |
+| `GET`    | `/dashboard` | aggregated overview |
+| `GET/POST/PATCH/DELETE` | `/providers[/{id}]` | provider CRUD |
+| `POST`   | `/providers/{id}/sync-models` | manual model list refresh |
+| `POST`   | `/providers/{id}/run` | immediate probe |
+| `GET`    | `/providers/{id}/models` | list models for a provider |
+| `PATCH`  | `/models/{id}` | toggle enabled / favorite |
+| `GET`    | `/results?provider_id&model_id&hours&limit` | probe history |
+| `GET/PUT` | `/settings` | global config |
+| `POST`   | `/import` / `/export` | config backup + restore |
+| `POST`   | `/probe/run?provider_id&model_id` | trigger probe |
+| `GET`    | `/events` | **SSE** event stream |
+
+See [`docs/api.md`](docs/api.md) for full request/response shapes.
+
+## Testing
 
 ```bash
+# Backend
 cd backend
-uv run pytest            # 67 tests
-uv run ruff check app    # lint
-uv run ruff format --check app
+uv run pytest -q               # 67 tests
+uv run ruff check
+uv run ruff format --check
 uv run mypy app
+
+# Frontend (type-check + production build)
+cd ../frontend
+pnpm build
+
+# End-to-end smoke (uses throwaway SQLite, auto-cleanup)
+cd ../backend
+bash scripts/e2e_smoke.sh
 ```
 
-## 数据库迁移
+CI runs all of the above on every PR. See `.github/workflows/ci.yml`.
 
-Schema 变更通过 [Alembic](https://alembic.sqlalchemy.org/) 管理。详见
-[`docs/superpowers/db-migrations.md`](docs/superpowers/db-migrations.md)。
+## Security
 
-```bash
-cd backend
-# 改完 app/db/models.py 后：
-uv run alembic revision --autogenerate -m "describe the change"
-uv run alembic upgrade head          # 本地试
-uv run alembic downgrade -1          # 回滚试
-uv run alembic upgrade head          # 再应用
-# 提交 app/db/models.py + alembic/versions/<rev>_*.py
-```
+- API keys are stored **in plaintext** in SQLite by design (local-first use case).
+- Default bind is `127.0.0.1`; **do not** expose to a public network without a reverse proxy + BasicAuth.
+- API keys are truncated to `sk-…xxxx` in logs.
+- See [SECURITY.md](SECURITY.md) for the full security model and disclosure process.
 
-## 端到端冒烟测试 + 测试数据清理
+## Contributing
 
-`scripts/e2e_smoke.sh` 用临时 SQLite 跑全套 13 个 API 验证，跑完自动清理 — 不要再用
-`curl` 直接对真实 `data/llm_usability.db` 测，避免污染用户数据。
+See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, conventions, and the PR process.
+All participants are expected to follow the [Code of Conduct](CODE_OF_CONDUCT.md).
 
-```bash
-cd backend
-bash scripts/e2e_smoke.sh    # 或: make e2e（如果加了 Makefile）
-```
+## Limitations (YAGNI)
 
-如果手贱写了 `t` / `demo` / `sk-test` 之类的测试数据到 DB：
+These are intentionally not built. Don't add them unless explicitly asked:
 
-```bash
-cd backend
-uv run python -m app.cli list-providers           # 列出全部
-uv run python -m app.cli cleanup-test-data        # 干跑：列出可疑条目，不删
-uv run python -m app.cli cleanup-test-data --yes  # 真的删
-```
+- Email / Slack / Webhook notifications
+- Multi-user / authentication
+- Distributed workers (Celery + Redis)
+- Active fail-over / request rerouting
+- Mobile client
 
-判定规则（`app/cli.py` 里的 `_looks_like_test_data`）：
-- 名字 ∈ {`t`, `test`, `demo`, `smoke`, `example`, `tmp`, `temp`, `x`}（大小写不敏感）
-- 或以 `test-` / `tmp-` 开头
-- key ∈ {`sk-test`, `sk-fake`, `k`, `test`, `demo`, `xxx`}
-- 或以 `sk-test` / `sk-fake` 开头
+## License
 
-启动时如果 DB 里有可疑条目，lifespan 会在日志里打 warning 提示。
-
-服务启动时 `lifespan` 自动 `alembic upgrade head`，无需手动跑。
-
-## API 概览
-
-| Method | Path | 说明 |
-|---|---|---|
-| `GET`    | `/api/v1/healthz` / `/readyz` | 健康 / 就绪 |
-| `GET`    | `/api/v1/dashboard` | 总览 |
-| `GET/POST/PATCH/DELETE` | `/api/v1/providers[/{id}]` | 服务商 CRUD |
-| `POST`   | `/api/v1/providers/{id}/sync-models` | 手动拉取模型 |
-| `POST`   | `/api/v1/providers/{id}/run` | 立即探测 |
-| `GET`    | `/api/v1/providers/{id}/models` | 模型列表 |
-| `PATCH`  | `/api/v1/models/{id}` | enabled / is_favorite |
-| `GET`    | `/api/v1/results` | 历史探测结果（`?provider_id&model_id&hours&limit`） |
-| `GET/PUT` | `/api/v1/settings` | 全局配置 |
-| `POST`   | `/api/v1/import` / `/export` | 配置导入 / 导出（含 api_key + favorites） |
-| `POST`   | `/api/v1/probe/run` | 手动触发探测 |
-| `GET`    | `/api/v1/events` | **SSE** 实时事件 |
-
-统一响应壳：`{data, error}`。
-
-## 安全声明
-
-- API Key **明文存 SQLite**。本服务默认绑定 `127.0.0.1`，适合个人本地使用。
-- **不推荐**公网 / 多人共用。部署到公网前请自行加反向代理 + BasicAuth。
-- 日志中 `api_key` 会被截断为 `sk-…xxxx` 形式，不会完整打印。
-
-## 限制（YAGNI）
-
-- 不做邮件 / Slack / Webhook 通知
-- 不做多用户 / 鉴权
-- 不做分布式 worker（Celery + Redis）
-- 不做主动 fail-over / 调用重路由
+[MIT](LICENSE)

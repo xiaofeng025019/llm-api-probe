@@ -7,7 +7,7 @@ export function ThemeToggle() {
     <button
       className="theme-toggle"
       onClick={toggle}
-      title={theme === "light" ? "切换到暗色模式" : "切换到亮色模式"}
+      title={theme === "light" ? "Switch to dark mode" : "Switch to light mode"}
       aria-label={theme === "light" ? "Switch to dark mode" : "Switch to light mode"}
       aria-pressed={theme === "dark"}
     >

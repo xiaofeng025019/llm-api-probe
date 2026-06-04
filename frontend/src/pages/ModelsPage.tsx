@@ -61,8 +61,8 @@ export function ModelsPage() {
     <div>
       <div className="page-header">
         <div>
-          <h1>收藏模型</h1>
-          <div className="subtitle">{allFavorites.length} 个模型被重点监测</div>
+          <h1>Favorite Models</h1>
+          <div className="subtitle">{allFavorites.length} models under active monitoring</div>
         </div>
       </div>
 
@@ -81,24 +81,24 @@ export function ModelsPage() {
             <Icon.Search />
           </span>
           <input
-            placeholder="搜索模型…"
+            placeholder="Search models…"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             style={{ paddingLeft: 32 }}
-            aria-label="搜索模型"
+            aria-label="Search models"
             type="search"
           />
         </div>
-        <div className="window-tabs" role="tablist" aria-label="按类型过滤">
+        <div className="window-tabs" role="tablist" aria-label="Filter by type">
           {TYPES.map((t) => (
             <button
               key={t}
               className={filter === t ? "active" : ""}
               onClick={() => setFilter(t)}
-              title={typeCounts[t] ? `${typeCounts[t]} 个` : ""}
+              title={typeCounts[t] ? `${typeCounts[t]} items` : ""}
               role="tab"
               aria-selected={filter === t}
-              aria-label={`类型 ${t}（${typeCounts[t] ?? 0} 个）`}
+              aria-label={`Type ${t} (${typeCounts[t] ?? 0} items)`}
             >
               {t}
               {typeCounts[t] > 0 && (
@@ -120,7 +120,7 @@ export function ModelsPage() {
 
       <div className="table-wrap">
         <table>
-          <caption className="sr-only">收藏模型列表</caption>
+          <caption className="sr-only">Favorite models</caption>
           <thead>
             <tr>
               <th scope="col">Provider</th>
@@ -157,7 +157,7 @@ export function ModelsPage() {
                         "Unfavorite",
                       ).then(refresh)
                     }
-                    aria-label={`取消收藏 ${r.model}`}
+                    aria-label={`Unfavorite ${r.model}`}
                   >
                     <Icon.Star filled />
                     Unfavorite
@@ -172,11 +172,11 @@ export function ModelsPage() {
                     <div className="empty-state-icon">
                       <Icon.Star />
                     </div>
-                    <h3>没有匹配的收藏模型</h3>
+                    <h3>No matching favorites</h3>
                     <p>
                       {allFavorites.length === 0
-                        ? "在 Provider 详情或 Dashboard 的模型表里点 ★ 收藏。"
-                        : "试试其他过滤条件。"}
+                        ? "Click the ★ on a model in the Provider detail or Dashboard to favorite it."
+                        : "Try a different filter or search term."}
                     </p>
                   </div>
                 </td>

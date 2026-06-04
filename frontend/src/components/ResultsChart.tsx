@@ -10,6 +10,7 @@ import {
 } from "recharts";
 import type { ProbeResult } from "../api/types";
 import { parseApiDate } from "../lib/format";
+import { useTheme } from "../hooks/useTheme";
 
 interface Point {
   t: number;
@@ -18,6 +19,15 @@ interface Point {
 }
 
 export function ResultsChart({ results }: { results: ProbeResult[] }) {
+  const [theme] = useTheme();
+  const isDark = theme === "dark";
+
+  // Theme-aware colors
+  const gridColor = isDark ? "#2d3344" : "#e5e7eb";
+  const axisColor = isDark ? "#7c8294" : "#9ca3af";
+  const latencyColor = "#5b5bd6"; // Use brand primary
+  const successColor = isDark ? "#4ade80" : "#16a34a";
+
   const data = useMemo<Point[]>(
     () =>
       [...results]
@@ -31,27 +41,27 @@ export function ResultsChart({ results }: { results: ProbeResult[] }) {
   );
 
   if (data.length === 0) {
-    return <div className="muted">该时间窗内还没有探测数据。</div>;
+    return <div className="muted">No probe data in this time window yet.</div>;
   }
 
   return (
     <div style={{ width: "100%", height: 240 }}>
       <ResponsiveContainer>
         <LineChart data={data} margin={{ top: 8, right: 16, left: 0, bottom: 0 }}>
-          <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+          <CartesianGrid strokeDasharray="3 3" stroke={gridColor} />
           <XAxis
             dataKey="t"
             type="number"
             domain={["dataMin", "dataMax"]}
             tickFormatter={(v) => new Date(v).toLocaleString()}
-            stroke="#9ca3af"
+            stroke={axisColor}
             fontSize={11}
           />
           <YAxis
             yAxisId="lat"
-            stroke="#9ca3af"
+            stroke={axisColor}
             fontSize={11}
-            label={{ value: "ms", angle: -90, position: "insideLeft", fill: "#9ca3af" }}
+            label={{ value: "ms", angle: -90, position: "insideLeft", fill: axisColor }}
           />
           <YAxis
             yAxisId="ok"
@@ -61,9 +71,15 @@ export function ResultsChart({ results }: { results: ProbeResult[] }) {
           />
           <Tooltip
             labelFormatter={(v) => new Date(Number(v)).toLocaleString()}
+            contentStyle={{
+              background: isDark ? "#131720" : "#ffffff",
+              border: `1px solid ${isDark ? "#2d3344" : "#e5e7eb"}`,
+              borderRadius: 8,
+              fontSize: 12,
+            }}
             formatter={(value: number | string, name: string) => {
-              if (name === "latency") return [`${value}ms`, "latency"];
-              if (name === "success") return [value === 1 ? "ok" : "fail", "status"];
+              if (name === "latency") return [`${value}ms`, "Latency"];
+              if (name === "success") return [value === 1 ? "ok" : "fail", "Status"];
               return [value, name];
             }}
           />
@@ -71,7 +87,7 @@ export function ResultsChart({ results }: { results: ProbeResult[] }) {
             yAxisId="lat"
             type="monotone"
             dataKey="latency"
-            stroke="#2563eb"
+            stroke={latencyColor}
             strokeWidth={2}
             dot={false}
             isAnimationActive={false}
@@ -81,7 +97,7 @@ export function ResultsChart({ results }: { results: ProbeResult[] }) {
             yAxisId="ok"
             type="stepAfter"
             dataKey="success"
-            stroke="#16a34a"
+            stroke={successColor}
             strokeWidth={1.5}
             dot={false}
             isAnimationActive={false}

@@ -81,6 +81,7 @@ export function ProviderDetailPage() {
   const [settings, setSettings] = useState<Setting[]>([]);
   const [window_, setWindow] = useState(WINDOWS[1]);
   const [error, setError] = useState<string | null>(null);
+  const [expandedModels, setExpandedModels] = useState<Record<string, boolean>>({});
 
   async function refresh() {
     if (!providerId) return;
@@ -240,15 +241,15 @@ export function ProviderDetailPage() {
             <h1>{provider.name}</h1>
             <div className="meta">
               <span>
-                <IconClock /> 模型清单每 {provider.interval_seconds}s 更新
+                <IconClock /> Model list refreshes every {provider.interval_seconds}s
               </span>
               <span>·</span>
               <span>
-                状态检测：{statusIntervalLabel}
+                Status probe: {statusIntervalLabel}
               </span>
               <span>·</span>
               <span>
-                <IconProbe /> 超时 {provider.timeout_seconds}s
+                <IconProbe /> Timeout {provider.timeout_seconds}s
               </span>
               {provider.proxy && (
                 <>
@@ -263,23 +264,23 @@ export function ProviderDetailPage() {
               className="secondary"
               onClick={async () => {
                 try {
-                  await withErrorToast(api.syncModels(providerId), "更新模型清单");
+                  await withErrorToast(api.syncModels(providerId), "Sync models");
                   await refresh();
                 } catch {
                   /* toast already shown */
                 }
               }}
-              title="从 provider 重新拉取可提供的模型列表"
+              title="Re-fetch the list of models from the provider"
             >
               <IconRefresh />
-              更新模型清单
+              Sync models
             </button>
             <button
-              onClick={() => withErrorToast(api.runNow(providerId), "检测状态").then(refresh)}
-              title="检测当前模型可用性、延迟和错误状态"
+              onClick={() => withErrorToast(api.runNow(providerId), "Probe status").then(refresh)}
+              title="Probe current model availability, latency and error status"
             >
               <IconPlay />
-              检测状态
+              Probe status
             </button>
           </div>
         </div>
@@ -287,7 +288,7 @@ export function ProviderDetailPage() {
 
       <div className="stat-grid stagger">
         <Stat
-          label="最近状态"
+          label="Latest status"
           value={lastResult ? (lastResult.success ? "OK" : "Failed") : "—"}
           accentColor={statusColor(
             lastResult ? (lastResult.success ? "ok" : "fail") : null,
@@ -295,17 +296,17 @@ export function ProviderDetailPage() {
           icon={lastResult?.success ? <IconCheck /> : <IconAlert />}
         />
         <Stat
-          label="最近延迟"
+          label="Latest latency"
           value={formatMs(lastResult?.latency_ms ?? null)}
           icon={<IconClock />}
         />
         <Stat
-          label="最近 TTFB"
+          label="Latest TTFB"
           value={formatMs(lastResult?.ttfb_ms ?? null)}
           icon={<IconActivity />}
         />
         <Stat
-          label={`${window_.label} 可用率`}
+          label={`${window_.label} availability`}
           value={availability != null ? `${availability.toFixed(1)}%` : "—"}
           accentColor={
             availability == null
@@ -316,16 +317,16 @@ export function ProviderDetailPage() {
                   ? "var(--warn)"
                   : "var(--fail)"
           }
-          hint={`${successes}/${results.length} 次成功`}
+          hint={`${successes}/${results.length} successful`}
           icon={<IconChart />}
         />
         <Stat
-          label={`${window_.label} 平均延迟`}
+          label={`${window_.label} avg latency`}
           value={formatMs(avgLatency)}
           icon={<IconClock />}
         />
         <Stat
-          label={`${window_.label} P95 延迟`}
+          label={`${window_.label} P95 latency`}
           value={formatMs(p95Latency)}
           icon={<IconGauge />}
         />
@@ -335,9 +336,9 @@ export function ProviderDetailPage() {
           icon={<IconActivity />}
         />
         <Stat
-          label={`${window_.label} 样本`}
-          value={`${qualityResults.length} / ${failures}`}
-          hint="总数 / 失败"
+          label={`${window_.label} samples`}
+          value={qualityResults.length}
+          hint={`${successes} successful, ${failures} failed`}
           icon={<IconHash />}
         />
       </div>
@@ -453,12 +454,12 @@ export function ProviderDetailPage() {
         <div className="section-header">
           <div className="section-title">
             <IconChart />
-            趋势
+            Trend
           </div>
           <div
             className="window-tabs"
             role="tablist"
-            aria-label="时间窗"
+            aria-label="Time window"
           >
             {WINDOWS.map((w, idx) => (
               <button
@@ -476,7 +477,7 @@ export function ProviderDetailPage() {
             ))}
           </div>
         </div>
-        <div role="tabpanel" aria-label={`${window_.label} 趋势`}>
+        <div role="tabpanel" aria-label={`${window_.label} trend`}>
           <ResultsChart results={results} />
         </div>
       </div>
@@ -487,169 +488,201 @@ export function ProviderDetailPage() {
             <IconModels />
             Models
           </div>
-          <span className="muted">{models.length} 个</span>
+          <span className="muted">{models.length} total</span>
         </div>
-        <div className="table-wrap fade-up">
-          <table>
-            <caption className="sr-only">Models for {provider.name}</caption>
-            <thead>
-              <tr>
-                <th style={{ width: 50 }} scope="col">
-                  <span className="sr-only">Favorite</span>
-                </th>
-                <th scope="col">Model</th>
-                <th scope="col">Status</th>
-                <th scope="col">Type</th>
-                <th scope="col">Enabled</th>
-                <th scope="col">Status checked</th>
-                <th scope="col">24h</th>
-                <th scope="col">Samples</th>
-                <th scope="col">Latency</th>
-                <th scope="col">TTFB</th>
-                <th scope="col">P95 Lat</th>
-                <th scope="col">P95 TTFB</th>
-                <th scope="col">Failures</th>
-                <th scope="col">Last success</th>
-                <th scope="col">Last seen</th>
-                <th style={{ width: 100 }} scope="col">
-                  <span className="sr-only">Actions</span>
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {models.map((m) => {
-                const latest = latestResultByModel.get(m.id);
-                const quality = modelQualityById.get(m.id);
-                const statusClass = modelHealthClass(m.status, m.enabled);
-                const statusLabel = modelHealthLabel(m.status, m.enabled);
-                return (
-                  <tr key={m.id}>
-                    <td>
+        {models.length === 0 ? (
+          <div className="empty-state" style={{ padding: 32 }}>
+            <p>No models yet. Click "Sync models" to fetch.</p>
+          </div>
+        ) : (
+          <div className="model-card-grid fade-up">
+            {models.map((m) => {
+              const latest = latestResultByModel.get(m.id);
+              const quality = modelQualityById.get(m.id);
+              const statusClass = modelHealthClass(m.status, m.enabled);
+              const statusLabel = modelHealthLabel(m.status, m.enabled);
+              const avail = quality?.availability24h;
+              const availColor =
+                avail == null ? "var(--unknown)" : avail >= 99 ? "var(--ok)" : avail >= 90 ? "var(--warn)" : "var(--fail)";
+              const expanded = expandedModels[m.id] ?? false;
+              return (
+                <div
+                  key={m.id}
+                  className={"model-card" + (expanded ? " model-card-expanded" : "")}
+                  style={{ "--model-type-color": modelTypeColor(m.type) } as React.CSSProperties}
+                >
+                  {/* ---- Header: name + type + actions ---- */}
+                  <div className="model-card-head">
+                    <div className="model-card-title">
                       <button
-                        className={`favorite-star ${m.is_favorite ? "active" : ""}`}
+                        className={"favorite-star" + (m.is_favorite ? " active" : "")}
                         onClick={() =>
-                          api
-                            .patchModel(m.id, { is_favorite: !m.is_favorite })
-                            .then(refresh)
+                          api.patchModel(m.id, { is_favorite: !m.is_favorite }).then(refresh)
                         }
-                        aria-label={m.is_favorite ? "取消收藏" : "收藏"}
+                        aria-label={m.is_favorite ? "Unfavorite" : "Favorite"}
                         aria-pressed={m.is_favorite}
                       >
                         <IconStarOutline filled={m.is_favorite} />
                       </button>
-                    </td>
-                    <td>
-                      <div className="model-name-cell">
-                        <strong>{m.model_id}</strong>
-                        {m.display_name && <span>{m.display_name}</span>}
-                      </div>
-                    </td>
-                    <td>
-                      <div className="model-status-stack">
-                        <span className={`model-status-pill ${statusClass}`}>
-                          <span className={`status-dot ${statusClass}`} />
-                          {statusLabel}
-                        </span>
-                        <span className="model-status-meta">
-                          {m.status_reason ?? (m.status_confirmed_at ? "confirmed" : "unconfirmed")}
-                        </span>
-                      </div>
-                    </td>
-                    <td>
-                      <span
-                        className="type-icon"
-                        style={{ background: modelTypeColor(m.type) }}
-                      >
+                      <span className="model-card-name" title={m.display_name || m.model_id}>
+                        {m.model_id}
+                      </span>
+                      <span className="model-card-type" style={{ color: "var(--model-type-color)" }}>
                         {m.type}
                       </span>
-                    </td>
-                    <td>
-                      <label
-                        style={{
-                          display: "inline-flex",
-                          alignItems: "center",
-                          gap: 6,
-                          cursor: "pointer",
-                        }}
-                      >
-                        <input
-                          type="checkbox"
-                          checked={m.enabled}
-                          onChange={() =>
-                            withErrorToast(
-                              api.patchModel(m.id, { enabled: !m.enabled }),
-                              "切换 enabled",
-                            ).then(refresh)
-                          }
-                          aria-label={`Enable ${m.model_id}`}
-                        />
-                        <span style={{ fontSize: 12 }}>
-                          {m.enabled ? "on" : "off"}
-                        </span>
-                      </label>
-                    </td>
-                    <td className="muted">
-                      {m.status_checked_at ? (
-                        <span title={formatTime(m.status_checked_at)}>
-                          {formatRelative(m.status_checked_at)}
-                        </span>
-                      ) : (
-                        "—"
-                      )}
-                    </td>
-                    <td className="mono">{formatPercent(quality?.availability24h)}</td>
-                    <td className="mono">{quality?.samples24h ?? 0}</td>
-                    <td className="mono">{formatMs(latest?.latency_ms ?? null)}</td>
-                    <td className="mono">{formatMs(latest?.ttfb_ms ?? null)}</td>
-                    <td className="mono">{formatMs(quality?.p95Latency)}</td>
-                    <td className="mono">{formatMs(quality?.p95Ttfb)}</td>
-                    <td>
-                      <span className={`pill ${m.consecutive_failures ? "warn" : "ok"}`}>
-                        {m.consecutive_failures}
-                      </span>
-                    </td>
-                    <td className="muted">
-                      {m.last_success_at ? (
-                        <span title={formatTime(m.last_success_at)}>
-                          {formatRelative(m.last_success_at)}
-                        </span>
-                      ) : (
-                        "—"
-                      )}
-                    </td>
-                    <td className="muted">
-                      <span title={formatTime(m.last_seen_at)}>
-                        {formatRelative(m.last_seen_at)}
-                      </span>
-                    </td>
-                    <td>
+                    </div>
+                    <div className="model-card-actions">
                       <button
-                        className="secondary sm"
+                        className="ghost sm"
                         onClick={() =>
-                          withErrorToast(api.probeNow(providerId, m.id), "检测模型").then(refresh)
+                          withErrorToast(
+                            api.patchModel(m.id, { enabled: !m.enabled }),
+                            "Toggle enabled",
+                          ).then(refresh)
                         }
-                        aria-label={`检测模型 ${m.model_id}`}
-                        title="只检测这个模型的可用性和延迟"
+                        aria-label={m.enabled ? "Pause model" : "Enable model"}
+                        title={m.enabled ? "Pause" : "Enable"}
+                      >
+                        {m.enabled ? <IconCheck /> : <IconAlert />}
+                      </button>
+                      <button
+                        className="ghost sm"
+                        onClick={() =>
+                          withErrorToast(api.probeNow(providerId, m.id), "Probe model").then(refresh)
+                        }
+                        aria-label={"Probe model " + m.model_id}
+                        title="Probe this model"
                       >
                         <IconProbe />
-                        检测模型
                       </button>
-                    </td>
-                  </tr>
-                );
-              })}
-              {models.length === 0 && (
-                <tr>
-                  <td colSpan={16}>
-                    <div className="empty-state">
-                      <p>没有模型。点 “更新模型清单” 拉取。</p>
+                      <button
+                        className="ghost sm"
+                        onClick={() =>
+                          setExpandedModels((prev) => ({ ...prev, [m.id]: !prev[m.id] }))
+                        }
+                        aria-label={expanded ? "Collapse details" : "Expand details"}
+                        title={expanded ? "Collapse" : "Details"}
+                      >
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          {expanded
+                            ? <polyline points="18 15 12 9 6 15" />
+                            : <polyline points="6 9 12 15 18 9" />
+                          }
+                        </svg>
+                      </button>
                     </div>
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
+                  </div>
+
+                  {/* ---- Status line ---- */}
+                  <div className="model-card-status">
+                    <span className={"status-dot " + statusClass} />
+                    <span className={"model-status-text " + statusClass}>{statusLabel}</span>
+                    {m.status_reason && (
+                      <span className="model-status-reason">{m.status_reason}</span>
+                    )}
+                    {m.consecutive_failures > 0 && (
+                      <span className="pill warn" style={{ fontSize: 10, padding: "1px 6px" }}>
+                        {m.consecutive_failures + "× fail"}
+                      </span>
+                    )}
+                    {!m.enabled && (
+                      <span className="pill warn" style={{ fontSize: 10, padding: "1px 6px" }}>
+                        disabled
+                      </span>
+                    )}
+                    <span className="muted" style={{ marginLeft: "auto", fontSize: 10 }}>
+                      {m.status_checked_at
+                        ? formatRelative(m.status_checked_at)
+                        : m.status_confirmed_at ? "confirmed" : "unconfirmed"}
+                    </span>
+                  </div>
+
+                  {/* ---- Collapsed: 4 key metrics ---- */}
+                  <div className="model-card-metrics">
+                    <div className="model-metric">
+                      <span className="model-metric-label">24h</span>
+                      <span className="model-metric-value" style={{ color: availColor }}>
+                        {formatPercent(avail)}
+                      </span>
+                    </div>
+                    <div className="model-metric">
+                      <span className="model-metric-label">Samples</span>
+                      <span className="model-metric-value">{quality?.samples24h ?? 0}</span>
+                    </div>
+                    <div className="model-metric">
+                      <span className="model-metric-label">P95</span>
+                      <span className="model-metric-value">{formatMs(quality?.p95Latency)}</span>
+                    </div>
+                    <div className="model-metric">
+                      <span className="model-metric-label">TTFB</span>
+                      <span className="model-metric-value">{formatMs(quality?.p95Ttfb)}</span>
+                    </div>
+                  </div>
+
+                  {/* ---- Availability bar ---- */}
+                  <div className="model-card-bar">
+                    <div
+                      className="model-card-bar-fill"
+                      style={{
+                        width: avail != null ? Math.min(100, avail) + "%" : "0%",
+                        background: availColor,
+                      }}
+                    />
+                  </div>
+
+                  {/* ---- Expanded: detailed metrics ---- */}
+                  {expanded && (
+                    <div className="model-card-details">
+                      <div className="model-details-grid">
+                        <div className="model-detail-item">
+                          <span className="model-detail-label">Latest Latency</span>
+                          <span className="model-detail-value">{formatMs(latest?.latency_ms)}</span>
+                        </div>
+                        <div className="model-detail-item">
+                          <span className="model-detail-label">Latest TTFB</span>
+                          <span className="model-detail-value">{formatMs(latest?.ttfb_ms)}</span>
+                        </div>
+                        <div className="model-detail-item">
+                          <span className="model-detail-label">P95 Latency</span>
+                          <span className="model-detail-value">{formatMs(quality?.p95Latency)}</span>
+                        </div>
+                        <div className="model-detail-item">
+                          <span className="model-detail-label">P95 TTFB</span>
+                          <span className="model-detail-value">{formatMs(quality?.p95Ttfb)}</span>
+                        </div>
+                        <div className="model-detail-item">
+                          <span className="model-detail-label">Failures</span>
+                          <span className={"model-detail-value" + (m.consecutive_failures > 0 ? " text-warn" : "")}>
+                            {m.consecutive_failures}
+                          </span>
+                        </div>
+                        <div className="model-detail-item">
+                          <span className="model-detail-label">24h Avail</span>
+                          <span className="model-detail-value" style={{ color: availColor }}>
+                            {formatPercent(avail)}
+                          </span>
+                        </div>
+                      </div>
+                      <div className="model-details-footer">
+                        <span>
+                          Status checked: {m.status_checked_at ? formatTime(m.status_checked_at) : "—"}
+                        </span>
+                        {m.last_success_at && (
+                          <span>
+                            Last success: {formatTime(m.last_success_at)}
+                          </span>
+                        )}
+                        <span>
+                          Last seen: {formatTime(m.last_seen_at)}
+                        </span>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
 
       <button
@@ -658,7 +691,7 @@ export function ProviderDetailPage() {
         style={{ marginTop: 16 }}
       >
         <IconBack />
-        返回 Providers
+        Back to Providers
       </button>
     </div>
   );

@@ -13,7 +13,7 @@ type FavoriteFilter = "all" | "favorites";
 
 function errorSummary(counts: Record<string, number>): string {
   const entries = Object.entries(counts).sort((a, b) => b[1] - a[1]);
-  if (entries.length === 0) return "无错误";
+  if (entries.length === 0) return "No errors";
   return entries.map(([code, count]) => `${code} ${count}`).join(" · ");
 }
 
@@ -67,8 +67,8 @@ export function ProvidersPage() {
     const nextEnabled = !p.enabled;
     setTogglingProviders((prev) => ({ ...prev, [p.id]: true }));
     try {
-      await withErrorToast(api.patchProvider(p.id, { enabled: nextEnabled }), "切换监测");
-      pushToast("ok", nextEnabled ? "已开启监测" : "已暂停监测", p.name);
+      await withErrorToast(api.patchProvider(p.id, { enabled: nextEnabled }), "Toggle monitoring");
+      pushToast("ok", nextEnabled ? "Monitoring enabled" : "Monitoring paused", p.name);
       await refresh();
     } catch {
       /* toast already shown */
@@ -115,30 +115,30 @@ export function ProvidersPage() {
       <div className="page-header">
         <div>
           <h1>Providers</h1>
-          <div className="subtitle">管理 LLM 服务商和检测配置</div>
+          <div className="subtitle">Manage LLM providers and probe configuration</div>
         </div>
         <div className="toolbar" style={{ margin: 0 }}>
           <button onClick={() => setShowAdd(true)}>
             <Icon.Plus />
-            添加 Provider
+            Add Provider
           </button>
         </div>
       </div>
 
       <div className="toolbar" style={{ marginBottom: 16 }}>
         <span className="muted" style={{ fontSize: 12 }}>
-          过滤：
+          Filter:
         </span>
         <div
           className="window-tabs"
           role="toolbar"
-          aria-label="按状态过滤"
+          aria-label="Filter by status"
         >
           {(
             [
-              { v: "all", label: "全部" },
-              { v: "ok", label: "正常" },
-              { v: "fail", label: "失败" },
+              { v: "all", label: "All" },
+              { v: "ok", label: "OK" },
+              { v: "fail", label: "Failing" },
             ] as { v: StatusFilter; label: string }[]
           ).map((opt) => (
             <button
@@ -155,12 +155,12 @@ export function ProvidersPage() {
         <div
           className="window-tabs"
           role="toolbar"
-          aria-label="按收藏过滤"
+          aria-label="Filter by favorites"
         >
           {(
             [
-              { v: "all", label: "全部模型" },
-              { v: "favorites", label: "★ 收藏" },
+              { v: "all", label: "All models" },
+              { v: "favorites", label: "★ Favorites" },
             ] as { v: FavoriteFilter; label: string }[]
           ).map((opt) => (
             <button
@@ -176,12 +176,12 @@ export function ProvidersPage() {
         </div>
         <span className="grow" />
         <span className="muted" style={{ fontSize: 12 }}>
-          显示 {filtered.length} / {totalUnfiltered}
+          Showing {filtered.length} / {totalUnfiltered}
         </span>
         {hasFilter && (
           <button className="ghost sm" onClick={() => setParams(new URLSearchParams(), { replace: true })}>
             <Icon.Close />
-            清除过滤
+            Clear filter
           </button>
         )}
       </div>
@@ -192,11 +192,11 @@ export function ProvidersPage() {
             <div className="empty-state-icon">
               <Icon.Server />
             </div>
-            <h3>还没有 provider</h3>
-            <p>添加你的第一个 LLM 服务商开始监测可用性。</p>
+            <h3>No providers yet</h3>
+            <p>Add your first LLM provider to start monitoring.</p>
             <button onClick={() => setShowAdd(true)} style={{ marginTop: 12 }}>
               <Icon.Plus />
-              添加 Provider
+              Add Provider
             </button>
           </div>
         </div>
@@ -206,14 +206,14 @@ export function ProvidersPage() {
             <div className="empty-state-icon">
               <Icon.Filter />
             </div>
-            <h3>没有匹配的 provider</h3>
-            <p>尝试调整或清除过滤条件。</p>
+            <h3>No matching providers</h3>
+            <p>Try adjusting or clearing your filters.</p>
             <button
               className="secondary"
               onClick={() => setParams(new URLSearchParams(), { replace: true })}
               style={{ marginTop: 12 }}
             >
-              清除过滤
+              Clear filter
             </button>
           </div>
         </div>
@@ -262,7 +262,7 @@ export function ProvidersPage() {
                     <div className="meta">
                       <span className="kind-badge">{p.kind}</span>
                       <span style={{ marginLeft: 8 }}>
-                        {models.length} models · 清单 {p.interval_seconds}s
+                        {models.length} models · list every {p.interval_seconds}s
                       </span>
                     </div>
                     <div className="dashboard-monitoring-line">
@@ -270,14 +270,14 @@ export function ProvidersPage() {
                         className={`monitoring-switch ${isToggling ? "busy" : ""}`}
                         onClick={(e) => e.stopPropagation()}
                         onKeyDown={(e) => e.stopPropagation()}
-                        title={p.enabled ? "暂停自动监测" : "开启自动监测"}
+                        title={p.enabled ? "Pause auto-monitoring" : "Start auto-monitoring"}
                       >
                         <input
                           type="checkbox"
                           checked={p.enabled}
                           disabled={isToggling}
                           onChange={() => void toggleMonitoring(p)}
-                          aria-label={`${p.enabled ? "暂停" : "开启"} ${p.name} 自动监测`}
+                          aria-label={`${p.enabled ? "Pause" : "Start"} auto-monitoring for ${p.name}`}
                         />
                         <span className="monitoring-switch-track" />
                         <span className="monitoring-switch-text">
@@ -286,9 +286,9 @@ export function ProvidersPage() {
                             : `Monitoring ${p.enabled ? "on" : "off"}`}
                         </span>
                       </label>
-                      <span className="muted">状态检测：{statusIntervalLabel}</span>
-                      {isRunning && <span className="pill info">状态检测已排队</span>}
-                      {isSyncing && <span className="pill info">模型清单更新中</span>}
+                      <span className="muted">Status probe: {statusIntervalLabel}</span>
+                      {isRunning && <span className="pill info">Probe queued</span>}
+                      {isSyncing && <span className="pill info">Syncing model list</span>}
                     </div>
                   </div>
                 </div>
@@ -302,7 +302,7 @@ export function ProvidersPage() {
                 {dash && (
                   <div className="metrics">
                     <div className="metric">
-                      <div className="label">24h 可用率</div>
+                      <div className="label">24h Availability</div>
                       <div className="value">
                         {dash.availability_24h != null
                           ? `${dash.availability_24h.toFixed(1)}%`
@@ -310,11 +310,11 @@ export function ProvidersPage() {
                       </div>
                     </div>
                     <div className="metric">
-                      <div className="label">P95 延迟</div>
+                      <div className="label">P95 Latency</div>
                       <div className="value">{formatMs(dash.p95_latency_ms_24h)}</div>
                     </div>
                     <div className="metric">
-                      <div className="label">样本 / 失败</div>
+                      <div className="label">Samples / Failures</div>
                       <div className="value">
                         {dash.samples_24h} / {dash.failures_24h}
                       </div>
@@ -347,20 +347,20 @@ export function ProvidersPage() {
                   <button
                     className="ghost sm"
                     onClick={() => setEditing(p)}
-                    title="编辑"
-                    aria-label={`编辑 ${p.name}`}
+                    title="Edit"
+                    aria-label={`Edit ${p.name}`}
                   >
                     <Icon.Edit />
                   </button>
                   <button
                     className="secondary sm"
                     disabled={isRunning || !p.enabled}
-                    title={p.enabled ? "检测当前模型可用性、延迟和错误状态" : "开启监测后可检测状态"}
+                    title={p.enabled ? "Probe current model availability, latency and error status" : "Enable monitoring before probing status"}
                     onClick={async () => {
                       setRunningProviders((prev) => ({ ...prev, [p.id]: true }));
                       try {
-                        await withErrorToast(api.runNow(p.id), "检测状态");
-                        pushToast("info", "状态检测已排队", p.name);
+                        await withErrorToast(api.runNow(p.id), "Probe status");
+                        pushToast("info", "Probe queued", p.name);
                         window.setTimeout(() => {
                           void refresh().finally(() => {
                             setRunningProviders((prev) => {
@@ -378,20 +378,20 @@ export function ProvidersPage() {
                         });
                       }
                     }}
-                    aria-label={`检测 ${p.name} 状态`}
+                    aria-label={`Probe ${p.name} status`}
                   >
                     {isRunning ? <span className="spinner" /> : <Icon.Run />}
-                    {isRunning ? "检测中..." : "检测状态"}
+                    {isRunning ? "Probing..." : "Probe status"}
                   </button>
                   <button
                     className="secondary sm"
                     disabled={isSyncing}
-                    title="从 provider 重新拉取可提供的模型列表"
+                    title="Re-fetch the list of models from the provider"
                     onClick={async () => {
                       setSyncingProviders((prev) => ({ ...prev, [p.id]: true }));
                       try {
-                        await withErrorToast(api.syncModels(p.id), "更新模型清单");
-                        pushToast("ok", "模型清单已更新", p.name);
+                        await withErrorToast(api.syncModels(p.id), "Sync models");
+                        pushToast("ok", "Model list updated", p.name);
                         await refresh();
                       } finally {
                         setSyncingProviders((prev) => {
@@ -401,25 +401,25 @@ export function ProvidersPage() {
                         });
                       }
                     }}
-                    aria-label={`更新 ${p.name} 模型清单`}
+                    aria-label={`Sync models for ${p.name}`}
                   >
                     {isSyncing ? <span className="spinner" /> : <Icon.Sync />}
-                    {isSyncing ? "更新中..." : "更新模型清单"}
+                    {isSyncing ? "Syncing..." : "Sync models"}
                   </button>
                   <button
                     className="ghost sm"
                     onClick={async () => {
-                      if (!confirm(`删除 ${p.name}?`)) return;
+                      if (!confirm(`Delete ${p.name}?`)) return;
                       try {
-                        await withErrorToast(api.deleteProvider(p.id), "删除");
-                        pushToast("ok", "已删除", p.name);
+                        await withErrorToast(api.deleteProvider(p.id), "Delete");
+                        pushToast("ok", "Deleted", p.name);
                         await refresh();
                       } catch {
                         /* toast already shown */
                       }
                     }}
-                    title="删除"
-                    aria-label={`删除 ${p.name}`}
+                    title="Delete"
+                    aria-label={`Delete ${p.name}`}
                   >
                     <Icon.Delete />
                   </button>
@@ -495,7 +495,7 @@ export function ProviderDialog({
           enabled,
         };
         if (apiKey) body.api_key = apiKey;
-        await withErrorToast(api.patchProvider(provider.id, body), isEdit ? "保存" : "创建");
+        await withErrorToast(api.patchProvider(provider.id, body), isEdit ? "Save" : "Create");
       } else {
         await withErrorToast(
           api.createProvider({
@@ -509,7 +509,7 @@ export function ProviderDialog({
             headers_json: headersJson || null,
             enabled,
           }),
-          "创建",
+          "Create",
         );
       }
       await onSaved();
@@ -532,8 +532,8 @@ export function ProviderDialog({
         aria-labelledby="provider-dialog-title"
       >
         <div className="modal-header">
-          <h3 id="provider-dialog-title">{isEdit ? `编辑 ${provider!.name}` : "添加 Provider"}</h3>
-          <button className="modal-close" onClick={onClose} aria-label="关闭">
+          <h3 id="provider-dialog-title">{isEdit ? `Edit ${provider!.name}` : "Add Provider"}</h3>
+          <button className="modal-close" onClick={onClose} aria-label="Close">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <line x1="18" y1="6" x2="6" y2="18" />
               <line x1="6" y1="6" x2="18" y2="18" />
@@ -569,7 +569,7 @@ export function ProviderDialog({
             <input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} />
           </div>
           <div className="form-row full">
-            <label>{isEdit ? "API Key（留空不修改）" : "API Key"}</label>
+            <label>{isEdit ? "API Key (leave blank to keep)" : "API Key"}</label>
             <input
               type="password"
               value={apiKey}
@@ -578,7 +578,7 @@ export function ProviderDialog({
             />
           </div>
           <div className="form-row full">
-            <label>Proxy（可选）</label>
+            <label>Proxy (optional)</label>
             <input
               value={proxy}
               onChange={(e) => setProxy(e.target.value)}
@@ -586,7 +586,7 @@ export function ProviderDialog({
             />
           </div>
           <div className="form-row">
-            <label>Model list interval (秒)</label>
+            <label>Model list interval (s)</label>
             <input
               type="number"
               value={intervalSec}
@@ -596,7 +596,7 @@ export function ProviderDialog({
             />
           </div>
           <div className="form-row">
-            <label>Timeout (秒)</label>
+            <label>Timeout (s)</label>
             <input
               type="number"
               value={timeoutSec}
@@ -606,7 +606,7 @@ export function ProviderDialog({
             />
           </div>
           <div className="form-row full">
-            <label>Custom Headers（JSON，可选）</label>
+            <label>Custom Headers (JSON, optional)</label>
             <textarea
               rows={2}
               value={headersJson}
@@ -624,7 +624,7 @@ export function ProviderDialog({
               />
               <span className="monitoring-switch-track" />
               <span className="monitoring-switch-text">
-                {enabled ? "开启自动监测" : "暂停自动监测"}
+                {enabled ? "Auto-monitoring on" : "Auto-monitoring off"}
               </span>
             </label>
           </div>
@@ -634,15 +634,15 @@ export function ProviderDialog({
 
         <div className="modal-footer">
           <button className="secondary" onClick={onClose} disabled={busy}>
-            取消
+            Cancel
           </button>
           <button onClick={submit} disabled={busy || (!isEdit && (!name || !apiKey))}>
             {busy ? (
               <>
-                <span className="spinner" /> 保存中…
+                <span className="spinner" /> Saving...
               </>
             ) : (
-              "保存"
+              "Save"
             )}
           </button>
         </div>

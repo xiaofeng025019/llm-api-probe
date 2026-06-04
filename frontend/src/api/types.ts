@@ -108,7 +108,7 @@ export interface Dashboard {
     favorites_online: number;
     favorites_total: number;
     /** Same favorites_online metric but at the time the 24h window
-     *  started. Used to show "↑2 vs 24h 前" delta on the Favorite
+     *  started. Used to show "↑2 vs 24h ago" delta on the Favorite
      *  Models card. */
     favorites_online_24h_ago?: number;
   };

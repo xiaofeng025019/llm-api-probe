@@ -33,7 +33,7 @@ export function modelStatusIntervals(settings: Setting[]): {
 
 export function modelStatusIntervalLabel(settings: Setting[]): string {
   const intervals = modelStatusIntervals(settings);
-  return `重点 ${formatInterval(intervals.favorite)} · 其他 ${formatInterval(intervals.regular)}`;
+  return `Favorites ${formatInterval(intervals.favorite)} · Others ${formatInterval(intervals.regular)}`;
 }
 
 export function modelStatusIntervalValue(settings: Setting[]): string {

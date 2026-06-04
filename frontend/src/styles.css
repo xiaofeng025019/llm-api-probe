@@ -117,13 +117,14 @@ body {
 
 body {
   font-family:
-    "Inter", system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    "Geist", "Inter", system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
   background: var(--bg);
   color: var(--text);
   font-size: 14px;
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  font-feature-settings: "ss01", "ss02", "cv01";
   transition: background-color var(--dur) var(--ease), color var(--dur) var(--ease);
 }
 
@@ -399,7 +400,7 @@ select {
 }
 
 textarea {
-  font-family: "JetBrains Mono", "SF Mono", Consolas, monospace;
+  font-family: "Geist Mono", "JetBrains Mono", "SF Mono", Consolas, monospace;
   font-size: 12px;
   resize: vertical;
   min-height: 64px;
@@ -606,7 +607,7 @@ textarea {
   border-radius: var(--r-sm);
   font-size: 11px;
   font-weight: 600;
-  font-family: "JetBrains Mono", "SF Mono", monospace;
+  font-family: "Geist Mono", "JetBrains Mono", "SF Mono", monospace;
   background: var(--bg-sunken);
   color: var(--muted-strong);
 }
@@ -740,6 +741,242 @@ tbody tr:last-child td {
   white-space: nowrap;
 }
 
+/* ---------- model card grid ------------------------------------------------- */
+
+.model-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 12px;
+}
+
+.model-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px 16px;
+  border: 1px solid var(--divider);
+  border-radius: var(--r-md);
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--model-type-color) 5%, transparent), transparent 40%),
+    var(--surface-2);
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.model-card:hover {
+  border-color: color-mix(in srgb, var(--model-type-color) 40%, var(--border));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--model-type-color) 10%, transparent);
+}
+
+.model-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.model-card-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  flex: 1;
+}
+
+.model-card-name {
+  font-weight: 650;
+  font-size: 13px;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.model-card-type {
+  font-family: "Geist Mono", "JetBrains Mono", "SF Mono", monospace;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  flex-shrink: 0;
+}
+
+.model-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.model-card-actions .ghost.sm {
+  padding: 4px 6px;
+  min-height: unset;
+  font-size: 12px;
+}
+
+.model-card-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  font-size: 11px;
+}
+
+.model-status-text {
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  font-size: 10px;
+}
+
+.model-status-text.ok { color: var(--ok); }
+.model-status-text.fail { color: var(--fail); }
+.model-status-text.warn { color: var(--warn); }
+.model-status-text.unknown { color: var(--muted); }
+
+.model-status-reason {
+  color: var(--muted);
+  font-size: 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 140px;
+}
+
+.model-card-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 4px;
+}
+
+.model-metric {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 6px 4px;
+  border-radius: var(--r-sm);
+  background: color-mix(in srgb, var(--bg-sunken) 60%, transparent);
+  border: 1px solid color-mix(in srgb, var(--border) 50%, transparent);
+}
+
+.model-metric-label {
+  font-size: 9px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  line-height: 1;
+}
+
+.model-metric-value {
+  font-family: "Geist Mono", "JetBrains Mono", "SF Mono", monospace;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  line-height: 1.2;
+  font-variant-numeric: tabular-nums;
+}
+
+.model-card-bar {
+  height: 3px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--border) 60%, transparent);
+  overflow: hidden;
+}
+
+.model-card-bar-fill {
+  height: 100%;
+  border-radius: 2px;
+  transition: width 0.4s ease;
+  min-width: 0;
+}
+
+.model-card-footer {
+  color: var(--muted);
+  font-size: 10px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+/* ---- expanded details panel ---- */
+
+.model-card-expanded {
+  grid-column: 1 / -1;
+  max-width: 720px;
+}
+
+.model-card-details {
+  margin-top: 6px;
+  padding-top: 12px;
+  border-top: 1px dashed color-mix(in srgb, var(--model-type-color) 20%, var(--divider));
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.model-details-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+}
+
+.model-detail-item {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 8px 12px;
+  border-radius: var(--r-sm);
+  background: color-mix(in srgb, var(--bg-sunken) 60%, transparent);
+  border: 1px solid color-mix(in srgb, var(--model-type-color) 8%, var(--border));
+  transition: background-color var(--dur) var(--ease), border-color var(--dur) var(--ease);
+}
+
+.model-detail-item:hover {
+  background: color-mix(in srgb, var(--bg-sunken) 80%, transparent);
+  border-color: color-mix(in srgb, var(--model-type-color) 15%, var(--border));
+}
+
+.model-detail-label {
+  font-size: 9px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-weight: 600;
+}
+
+.model-detail-value {
+  font-family: "Geist Mono", "JetBrains Mono", "SF Mono", monospace;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  line-height: 1.2;
+}
+
+.text-warn {
+  color: var(--warn);
+}
+
+.model-details-footer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+  font-size: 10px;
+  color: var(--muted);
+  padding-top: 4px;
+  border-top: 1px solid var(--divider);
+}
+
+.model-details-footer span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
 /* ---------- forms -------------------------------------------------------- */
 
 .form-grid {
@@ -792,7 +1029,7 @@ tbody tr:last-child td {
 }
 
 .mono {
-  font-family: "JetBrains Mono", "SF Mono", Consolas, monospace;
+  font-family: "Geist Mono", "JetBrains Mono", "SF Mono", Consolas, monospace;
   font-size: 12px;
 }
 
@@ -1278,7 +1515,7 @@ tbody tr:last-child td {
 
 .endpoint-value {
   margin-top: 14px;
-  font-family: "JetBrains Mono", "SF Mono", monospace;
+  font-family: "Geist Mono", "JetBrains Mono", "SF Mono", monospace;
   font-size: 13px;
   line-height: 1.5;
   color: var(--text);
@@ -1496,7 +1733,7 @@ tbody tr:last-child td {
 
 .favorite-model-type {
   color: var(--model-type-color);
-  font-family: "JetBrains Mono", "SF Mono", monospace;
+  font-family: "Geist Mono", "JetBrains Mono", "SF Mono", monospace;
   font-weight: 700;
 }
 

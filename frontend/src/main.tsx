@@ -26,7 +26,7 @@ function App() {
   return (
     <BrowserRouter>
       <a href="#main" className="skip-link">
-        跳到主要内容
+        Skip to main content
       </a>
       <div className="app">
         <header className="topbar" role="banner">
@@ -34,9 +34,9 @@ function App() {
             <div className="brand-mark" aria-hidden="true">
               L
             </div>
-            <span>LLM 可用性</span>
+            <span>LLM Usability</span>
           </div>
-          <nav aria-label="主导航">
+          <nav aria-label="Primary">
             <NavLink to="/" end>
               Dashboard
             </NavLink>

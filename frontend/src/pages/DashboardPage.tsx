@@ -37,17 +37,17 @@ function favoritesSub(totals: {
   favorites_online: number;
   favorites_online_24h_ago?: number;
 }): string {
-  if (totals.favorites_total === 0) return "未收藏任何 model";
+  if (totals.favorites_total === 0) return "No favorite models";
   const pct = Math.round(
     (totals.favorites_online / Math.max(1, totals.favorites_total)) * 100,
   );
-  const base = `${pct}% 在线`;
+  const base = `${pct}% online`;
   if (totals.favorites_online_24h_ago == null) return base;
   const delta = totals.favorites_online - totals.favorites_online_24h_ago;
-  if (delta === 0) return `${base} · 与 24h 前持平`;
+  if (delta === 0) return `${base} · flat vs 24h ago`;
   const sign = delta > 0 ? "↑" : "↓";
-  const word = Math.abs(delta) === 1 ? "个" : "个";
-  return `${base} · ${sign}${Math.abs(delta)} ${word} vs 24h 前`;
+  const word = Math.abs(delta) === 1 ? "model" : "models";
+  return `${base} · ${sign}${Math.abs(delta)} ${word} vs 24h ago`;
 }
 
 function modelStatusLabel(model: DashboardFavoriteModel): string {
@@ -56,7 +56,7 @@ function modelStatusLabel(model: DashboardFavoriteModel): string {
 
 function errorSummary(counts: Record<string, number>): string {
   const entries = Object.entries(counts).sort((a, b) => b[1] - a[1]);
-  if (entries.length === 0) return "无错误";
+  if (entries.length === 0) return "No errors";
   return entries.map(([code, count]) => `${code} ${count}`).join(" · ");
 }
 
@@ -70,10 +70,10 @@ export function DashboardPage() {
   const statusIntervalValue = modelStatusIntervalValue(settings);
 
   async function onDelete(p: Provider) {
-    if (!confirm(`删除 provider ${p.name}?`)) return;
+    if (!confirm(`Delete provider ${p.name}?`)) return;
     try {
-      await withErrorToast(api.deleteProvider(p.id), "删除");
-      pushToast("ok", "已删除", p.name);
+      await withErrorToast(api.deleteProvider(p.id), "Delete");
+      pushToast("ok", "Deleted", p.name);
       await refresh();
     } catch {
       /* toast already shown */
@@ -85,8 +85,8 @@ export function DashboardPage() {
       <div>
         <div className="page-header">
           <div>
-            <h1>总览</h1>
-            <div className="subtitle">所有 LLM 服务商的实时可用性</div>
+            <h1>Dashboard</h1>
+            <div className="subtitle">Real-time availability of all LLM providers</div>
           </div>
         </div>
         <div className="stat-grid">
@@ -109,8 +109,8 @@ export function DashboardPage() {
     <div>
       <div className="page-header">
         <div>
-          <h1>总览</h1>
-          <div className="subtitle">所有 LLM 服务商的实时可用性</div>
+          <h1>Dashboard</h1>
+          <div className="subtitle">Real-time availability of all LLM providers</div>
         </div>
       </div>
 
@@ -121,7 +121,7 @@ export function DashboardPage() {
           <StatCard
             label="Providers"
             value={`${activeDashboardProviders.length} / ${dashboard.totals.providers}`}
-            sub="开启监测"
+            sub="monitoring"
             icon={<IconServer />}
             accentColor="var(--primary)"
             to="/providers"
@@ -135,8 +135,8 @@ export function DashboardPage() {
             }
             sub={
               dashboard.totals.models > 0
-                ? `${Math.round(((dashboard.totals.available_models ?? 0) / dashboard.totals.models) * 100)}% 24h 在线`
-                : "无 model"
+                ? `${Math.round(((dashboard.totals.available_models ?? 0) / dashboard.totals.models) * 100)}% online 24h`
+                : "no models"
             }
             progress={
               dashboard.totals.models > 0
@@ -169,7 +169,7 @@ export function DashboardPage() {
               <IconServer />
               Providers
             </div>
-            <span className="muted">{activeDashboardProviders.length} 个开启监测</span>
+            <span className="muted">{activeDashboardProviders.length} active</span>
           </div>
           <div className="dashboard-provider-list stagger">
             {activeDashboardProviders.map((p) => {
@@ -218,7 +218,7 @@ export function DashboardPage() {
                           List {p.list_models_status ?? "unknown"}
                         </span>
                         <span className="muted">{statusIntervalLabel}</span>
-                        {isRunning && <span className="pill info">状态检测已排队</span>}
+                        {isRunning && <span className="pill info">Probe queued</span>}
                       </div>
                     </div>
                   </div>
@@ -227,7 +227,7 @@ export function DashboardPage() {
                     <div className="dashboard-provider-summary">
                       <div className="metrics">
                         <div className="metric">
-                          <div className="label">24h 可用率</div>
+                          <div className="label">24h Availability</div>
                           <div
                             className="value"
                             style={{
@@ -245,7 +245,7 @@ export function DashboardPage() {
                           </div>
                         </div>
                         <div className="metric">
-                          <div className="label">P95 延迟</div>
+                          <div className="label">P95 Latency</div>
                           <div className="value">{formatMs(p.p95_latency_ms_24h)}</div>
                         </div>
                         <div className="metric">
@@ -253,7 +253,7 @@ export function DashboardPage() {
                           <div className="value">{formatMs(p.p95_ttfb_ms_24h)}</div>
                         </div>
                         <div className="metric">
-                          <div className="label">样本 / 失败</div>
+                          <div className="label">Samples / Failures</div>
                           <div className="value">{p.samples_24h} / {p.failures_24h}</div>
                         </div>
                         <div className="metric dashboard-wide-metric">
@@ -301,7 +301,7 @@ export function DashboardPage() {
                         <div className="dashboard-favorites-head">
                           <span>
                             <IconStarOutline filled />
-                            重点关注模型
+                            Favorite Models
                           </span>
                           <strong>
                             {p.favorite_models_online}/{p.favorite_models_total}
@@ -321,7 +321,7 @@ export function DashboardPage() {
                           </div>
                         ) : (
                           <div className="favorite-model-empty">
-                            暂无收藏模型，在 Models 或 Provider 详情页标记重点关注。
+                            No favorite models yet. Mark them on the Models or Provider Detail page.
                           </div>
                         )}
                       </div>
@@ -340,7 +340,7 @@ export function DashboardPage() {
                         setRunningProviders((prev) => ({ ...prev, [p.provider_id]: true }));
                         try {
                           await api.runNow(p.provider_id);
-                          pushToast("info", "状态检测已排队", p.name);
+                          pushToast("info", "Probe queued", p.name);
                           window.setTimeout(() => {
                             void refresh().finally(() => {
                               setRunningProviders((prev) => {
@@ -356,38 +356,38 @@ export function DashboardPage() {
                             delete next[p.provider_id];
                             return next;
                           });
-                          pushToast("fail", "触发失败", e instanceof Error ? e.message : String(e));
+                          pushToast("fail", "Trigger failed", e instanceof Error ? e.message : String(e));
                         }
                       }}
-                      title="检测当前模型可用性、延迟和错误状态"
-                      aria-label="检测状态"
+                      title="Probe current model availability, latency and error status"
+                      aria-label="Probe status"
                     >
                       {isRunning ? <span className="spinner" /> : <IconPlay />}
-                      {isRunning ? "检测中..." : "检测状态"}
+                      {isRunning ? "Probing..." : "Probe status"}
                     </button>
                     <button
                       className="secondary sm"
                       onClick={async () => {
                         try {
                           await api.syncModels(p.provider_id);
-                          pushToast("ok", "模型清单已更新", p.name);
+                          pushToast("ok", "Model list updated", p.name);
                           await refresh();
                         } catch (e) {
-                          pushToast("fail", "更新失败", e instanceof Error ? e.message : String(e));
+                          pushToast("fail", "Update failed", e instanceof Error ? e.message : String(e));
                         }
                       }}
-                      title="从 provider 重新拉取可提供的模型列表"
-                      aria-label="更新模型清单"
+                      title="Re-fetch the list of models from the provider"
+                      aria-label="Sync models"
                     >
                       <IconRefresh />
-                      更新模型清单
+                      Sync models
                     </button>
                     {provider && (
                       <button
                         className="ghost sm"
                         onClick={() => onDelete(provider)}
-                        aria-label="删除"
-                        title="删除"
+                        aria-label="Delete"
+                        title="Delete"
                       >
                         <IconDelete />
                       </button>
@@ -399,14 +399,14 @@ export function DashboardPage() {
             <button
               className="dashboard-add-provider-card"
               onClick={() => setShowAddProvider(true)}
-              aria-label="添加 Provider"
+              aria-label="Add Provider"
             >
               <span className="dashboard-add-provider-icon">
                 <IconPlus />
               </span>
               <span className="dashboard-add-provider-copy">
-                <strong>添加 Provider</strong>
-                <span>接入新的 LLM 服务商并配置监测频率</span>
+                <strong>Add Provider</strong>
+                <span>Connect a new LLM provider and configure monitoring frequency</span>
               </span>
             </button>
           </div>
@@ -419,14 +419,14 @@ export function DashboardPage() {
             <div className="empty-state-icon">
               <IconServer />
             </div>
-            <h3>还没有 provider</h3>
-            <p>在 Providers 页面添加一个 LLM 服务商开始监测。</p>
+            <h3>No providers yet</h3>
+            <p>Add an LLM provider on the Providers page to start monitoring.</p>
             <button
               onClick={() => setShowAddProvider(true)}
               style={{ marginTop: 12 }}
             >
               <IconPlus />
-              添加 Provider
+              Add Provider
             </button>
           </div>
         </div>
@@ -437,14 +437,14 @@ export function DashboardPage() {
             <div className="empty-state-icon">
               <IconServer />
             </div>
-            <h3>没有开启监测的 provider</h3>
-            <p>在 Providers 页面打开监测开关后，这里只展示正在监测的 provider。</p>
+            <h3>No monitoring providers</h3>
+            <p>Toggle monitoring on the Providers page to see them here.</p>
             <button
               onClick={() => nav("/providers")}
               style={{ marginTop: 12 }}
             >
               <IconServer />
-              管理 Providers
+              Manage Providers
             </button>
           </div>
         </div>
@@ -534,14 +534,14 @@ function FavoriteModelStatus({
           e.stopPropagation();
           try {
             await api.probeNow(providerId, model.id);
-            pushToast("info", "已触发模型探测", `${providerName} / ${displayName}`);
+            pushToast("info", "Model probe triggered", `${providerName} / ${displayName}`);
             await onRefresh();
           } catch (e) {
-            pushToast("fail", "触发失败", e instanceof Error ? e.message : String(e));
+            pushToast("fail", "Trigger failed", e instanceof Error ? e.message : String(e));
           }
         }}
-        aria-label={`立即探测 ${displayName}`}
-        title="立即探测"
+        aria-label={`Probe ${displayName} now`}
+        title="Probe now"
       >
         <IconPlay />
       </button>
@@ -571,11 +571,11 @@ function StatCard({
   const clickable = !!to;
   // The card's a11y name includes the headline number (the most important
   // data on the dashboard) plus the navigation target. Format:
-  //   "Providers 3, 查看详情" / "Favorites online 8 of 12, 查看"
+  //   "Providers 3, view details" / "Favorites online 8 of 12, view"
   const friendlyValue =
     typeof value === "number" ? value.toString() : String(value);
   const ariaLabel = clickable
-    ? `${label} ${friendlyValue}${hint ? `, ${hint}` : ""}${sub ? `, ${sub}` : ""}, 查看详情`
+    ? `${label} ${friendlyValue}${hint ? `, ${hint}` : ""}${sub ? `, ${sub}` : ""}, view details`
     : `${label} ${friendlyValue}`;
   const inner = (
     <>

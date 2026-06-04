@@ -5,14 +5,14 @@ import { withErrorToast, describeError } from "../lib/action";
 import { pushToast } from "../components/Toast";
 
 const KNOWN_KEYS = [
-  { key: "default_interval_seconds", desc: "默认模型清单更新间隔（秒）", defaultValue: "300" },
-  { key: "favorite_model_interval_seconds", desc: "重点关注模型状态检测间隔（秒）", defaultValue: "300" },
-  { key: "regular_model_interval_seconds", desc: "普通模型状态检测间隔（秒）", defaultValue: "600" },
-  { key: "favorite_model_failure_confirmations", desc: "重点关注模型连续失败确认次数", defaultValue: "2" },
-  { key: "regular_model_failure_confirmations", desc: "普通模型连续失败确认次数", defaultValue: "3" },
-  { key: "default_timeout_seconds", desc: "默认超时（秒）", defaultValue: "30" },
-  { key: "max_concurrency", desc: "全局最大并发探测数", defaultValue: "10" },
-  { key: "retention_days", desc: "历史结果保留天数", defaultValue: "30" },
+  { key: "default_interval_seconds", desc: "Default model list refresh interval (s)", defaultValue: "300" },
+  { key: "favorite_model_interval_seconds", desc: "Favorite model probe interval (s)", defaultValue: "300" },
+  { key: "regular_model_interval_seconds", desc: "Regular model probe interval (s)", defaultValue: "600" },
+  { key: "favorite_model_failure_confirmations", desc: "Consecutive failures to confirm a favorite model as down", defaultValue: "2" },
+  { key: "regular_model_failure_confirmations", desc: "Consecutive failures to confirm a regular model as down", defaultValue: "3" },
+  { key: "default_timeout_seconds", desc: "Default per-probe timeout (s)", defaultValue: "30" },
+  { key: "max_concurrency", desc: "Max concurrent probes (global)", defaultValue: "10" },
+  { key: "retention_days", desc: "Days to keep historical probe results", defaultValue: "30" },
 ];
 
 export function SettingsPage() {
@@ -39,12 +39,12 @@ export function SettingsPage() {
     setBusy(true);
     setMsg(null);
     try {
-      await withErrorToast(api.putSettings(values), "保存");
-      setMsg("✓ 已保存");
+      await withErrorToast(api.putSettings(values), "Save");
+      setMsg("✓ Saved");
       await load();
     } catch (e) {
       const { detail } = describeError(e);
-      setMsg(detail ?? "保存失败");
+      setMsg(detail ?? "Save failed");
     } finally {
       setBusy(false);
     }
@@ -52,7 +52,7 @@ export function SettingsPage() {
 
   async function doExport() {
     try {
-      const data = await withErrorToast(api.exportConfig(), "导出");
+      const data = await withErrorToast(api.exportConfig(), "Export");
       const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
@@ -78,14 +78,14 @@ export function SettingsPage() {
         const payload = JSON.parse(text);
         const r = await withErrorToast(
           api.importConfig(payload),
-          "导入",
+          "Import",
         );
-        setMsg(`✓ 导入：新建 ${r.providers_created}，更新 ${r.providers_updated}`);
+        setMsg(`✓ Import: created ${r.providers_created}, updated ${r.providers_updated}`);
         await load();
-        pushToast("ok", "导入完成", `新建 ${r.providers_created}, 更新 ${r.providers_updated}`);
+        pushToast("ok", "Import complete", `Created ${r.providers_created}, updated ${r.providers_updated}`);
       } catch (e) {
         const { detail } = describeError(e);
-        setImportErr(detail ?? "导入失败");
+        setImportErr(detail ?? "Import failed");
       }
     };
     input.click();
@@ -97,8 +97,8 @@ export function SettingsPage() {
     <div>
       <div className="page-header">
         <div>
-          <h1>设置</h1>
-          <div className="subtitle">全局配置和导入导出</div>
+          <h1>Settings</h1>
+          <div className="subtitle">Global configuration and import/export</div>
         </div>
       </div>
 
@@ -106,7 +106,7 @@ export function SettingsPage() {
         <div className="section-header">
           <div className="section-title">
             <Icon.Settings />
-            全局设置
+            Global Settings
           </div>
         </div>
         <div className="card">
@@ -139,10 +139,10 @@ export function SettingsPage() {
             <button onClick={save} disabled={busy}>
               {busy ? (
                 <>
-                  <span className="spinner" /> 保存中…
+                  <span className="spinner" /> Saving...
                 </>
               ) : (
-                "保存"
+                "Save"
               )}
             </button>
             {msg && (
@@ -154,7 +154,7 @@ export function SettingsPage() {
           {otherSettings.length > 0 && (
             <details style={{ marginTop: 16 }}>
               <summary className="muted" style={{ cursor: "pointer" }}>
-                其它设置 ({otherSettings.length})
+                Other settings ({otherSettings.length})
               </summary>
               <pre
                 style={{
@@ -177,7 +177,7 @@ export function SettingsPage() {
         <div className="section-header">
           <div className="section-title">
             <Icon.Download />
-            导入 / 导出
+            Import / Export
           </div>
         </div>
         <div className="card settings-transfer-card">
@@ -187,12 +187,12 @@ export function SettingsPage() {
                 <Icon.Download />
               </div>
               <div className="settings-transfer-copy">
-                <strong>导出配置</strong>
-                <span>下载当前 providers、重点关注模型和 settings 的 JSON 快照。</span>
+                <strong>Export configuration</strong>
+                <span>Download a JSON snapshot of current providers, favorites, and settings.</span>
               </div>
               <button className="secondary settings-transfer-action" onClick={() => doExport()}>
                 <Icon.Download />
-                导出配置
+                Export configuration
               </button>
             </div>
             <div className="settings-transfer-panel">
@@ -200,12 +200,12 @@ export function SettingsPage() {
                 <Icon.Upload />
               </div>
               <div className="settings-transfer-copy">
-                <strong>导入配置</strong>
-                <span>选择 JSON 文件并更新 provider 配置、收藏模型和全局设置。</span>
+                <strong>Import configuration</strong>
+                <span>Choose a JSON file to update providers, favorite models, and global settings.</span>
               </div>
               <button className="settings-transfer-action" onClick={() => doImport()}>
                 <Icon.Upload />
-                导入配置
+                Import configuration
               </button>
             </div>
           </div>
