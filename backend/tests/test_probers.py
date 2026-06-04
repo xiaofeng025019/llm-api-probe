@@ -1,4 +1,5 @@
 """Prober adapter tests with respx-mocked httpx."""
+
 from __future__ import annotations
 
 import httpx
@@ -134,7 +135,7 @@ async def test_openai_probe_chat_stream_records_ttfb() -> None:
     body_chunk = b'data: {"choices":[{"delta":{"content":"h"}}]}\n\n'
     done_chunk = b"data: [DONE]\n\n"
 
-    async def stream_handler(request: httpx.Request) -> httpx.Response:  # noqa: ARG001
+    async def stream_handler(request: httpx.Request) -> httpx.Response:
         import asyncio
 
         async def gen():
@@ -175,9 +176,7 @@ async def test_openai_probe_chat_stream_401_captures_error_body() -> None:
     and triggers StreamConsumed on the subsequent aread()."""
     p = make_provider()
     respx.post("https://api.example.com/v1/chat/completions").mock(
-        return_value=httpx.Response(
-            401, json={"error": {"message": "Incorrect API key"}}
-        )
+        return_value=httpx.Response(401, json={"error": {"message": "Incorrect API key"}})
     )
     async with httpx.AsyncClient() as c:
         out = await OpenAIProber(c).probe_chat(p, "gpt-4o", stream=True)
@@ -207,9 +206,7 @@ async def test_anthropic_probe_chat_stream_500_captures_error_body() -> None:
 @respx.mock
 async def test_gemini_probe_chat_stream_429_captures_error_body() -> None:
     p = make_provider(ProviderKind.gemini, "https://generativelanguage.googleapis.com")
-    respx.post(url__regex=r".*googleapis\.com.*").mock(
-        return_value=httpx.Response(429, text="quota")
-    )
+    respx.post(url__regex=r".*googleapis\.com.*").mock(return_value=httpx.Response(429, text="quota"))
     async with httpx.AsyncClient() as c:
         out = await GeminiProber(c).probe_chat(p, "gemini-1.5-pro", stream=True)
     assert not out.success
@@ -240,9 +237,7 @@ async def test_openai_probe_chat_stream_2xx_succeeds() -> None:
 @respx.mock
 async def test_openai_probe_chat_timeout_maps_to_timeout() -> None:
     p = make_provider()
-    respx.post("https://api.example.com/v1/chat/completions").mock(
-        side_effect=httpx.ConnectTimeout("slow")
-    )
+    respx.post("https://api.example.com/v1/chat/completions").mock(side_effect=httpx.ConnectTimeout("slow"))
     async with httpx.AsyncClient() as c:
         out = await OpenAIProber(c).probe_chat(p, "gpt-4o", stream=False)
     assert not out.success

@@ -1,19 +1,18 @@
 """End-to-end real HTTP probing against mocked upstreams (respx on shared client)."""
+
 from __future__ import annotations
 
 import asyncio
-import time
+import contextlib
 
 import httpx
-import respx
 import pytest
+import respx
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.core import scheduler as sched_mod
 from app.core.scheduler import (
     _run_probe,
-    daily_cleanup,
-    sync_all_jobs,
     sync_jobs_for_provider,
 )
 from app.core.sse import get_sse
@@ -51,7 +50,7 @@ async def test_e2e_openai_probe_with_models_and_sse() -> None:
         while True:
             try:
                 payload = await asyncio.wait_for(queue.get(), timeout=2.0)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 return
             header, _, rest = payload.partition("\n")
             if header.startswith("event: "):
@@ -59,6 +58,7 @@ async def test_e2e_openai_probe_with_models_and_sse() -> None:
                 data_line = rest.split("\n", 1)[0]
                 _, data_str = data_line.split(": ", 1)
                 import json
+
                 events.append((name, json.loads(data_str)))
 
     task = asyncio.create_task(reader())
@@ -114,10 +114,8 @@ async def test_e2e_openai_probe_with_models_and_sse() -> None:
         # give SSE reader time to drain
         await asyncio.sleep(0.2)
         task.cancel()
-        try:
+        with contextlib.suppress(asyncio.CancelledError):
             await task
-        except asyncio.CancelledError:
-            pass
 
         # verify
         async with sm() as s:
@@ -236,9 +234,9 @@ async def test_e2e_daily_cleanup_removes_old_and_disables_stale() -> None:
     try:
         from datetime import datetime, timedelta
 
+        from app.probers.types import DiscoveredModel
+        from app.services.models import disable_stale, upsert_discovered
         from app.services.results import cleanup_old
-        from app.services.models import upsert_discovered, disable_stale
-        from app.probers.types import DiscoveredModel, ProbeOutcome
 
         async with sm() as s:
             p = await providers_svc.create_provider(
@@ -251,8 +249,8 @@ async def test_e2e_daily_cleanup_removes_old_and_disables_stale() -> None:
                 ),
             )
             # old + new result (use naive datetimes to match DB)
+
             from app.db.models import ProbeResult, ProbeTarget
-            from sqlalchemy import select
 
             old = ProbeResult(
                 provider_id=p.id,
@@ -263,7 +261,7 @@ async def test_e2e_daily_cleanup_removes_old_and_disables_stale() -> None:
             )
             s.add(old)
             await s.flush()
-            old.checked_at = datetime.now() - timedelta(days=60)  # noqa: DTZ005
+            old.checked_at = datetime.now() - timedelta(days=60)
             new = ProbeResult(
                 provider_id=p.id,
                 model_id=None,
@@ -281,10 +279,8 @@ async def test_e2e_daily_cleanup_removes_old_and_disables_stale() -> None:
             assert len(remaining) == 1
 
             # stale model
-            ms = await upsert_discovered(
-                s, p.id, [DiscoveredModel(model_id="stale-1")]
-            )
-            ms[0].last_seen_at = datetime.now() - timedelta(days=30)  # noqa: DTZ005
+            ms = await upsert_discovered(s, p.id, [DiscoveredModel(model_id="stale-1")])
+            ms[0].last_seen_at = datetime.now() - timedelta(days=30)
             await s.commit()
             disabled = await disable_stale(s, days=7)
             assert disabled == 1

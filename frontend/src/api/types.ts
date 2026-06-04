@@ -54,6 +54,8 @@ export interface Dashboard {
     models: number;
     ok: number;
     failing: number;
+    /** Number of models whose most recent probe in the last 24h succeeded. */
+    available_models?: number;
     favorites_online: number;
     favorites_total: number;
   };

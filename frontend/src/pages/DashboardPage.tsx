@@ -103,18 +103,25 @@ export function DashboardPage() {
             to="/providers"
           />
           <StatCard
-            label="OK"
-            value={dashboard.totals.ok}
+            label="Available"
+            value={
+              dashboard.totals.models > 0
+                ? `${dashboard.totals.available_models ?? 0} / ${dashboard.totals.models}`
+                : "—"
+            }
+            sub={
+              dashboard.totals.models > 0
+                ? `${Math.round(((dashboard.totals.available_models ?? 0) / dashboard.totals.models) * 100)}% 24h 在线`
+                : "无 model"
+            }
+            progress={
+              dashboard.totals.models > 0
+                ? ((dashboard.totals.available_models ?? 0) / dashboard.totals.models) * 100
+                : null
+            }
             icon={<IconCheck />}
             accentColor="var(--ok)"
-            to="/providers?status=ok"
-          />
-          <StatCard
-            label="Failing"
-            value={dashboard.totals.failing}
-            icon={<IconAlert />}
-            accentColor="var(--fail)"
-            to="/providers?status=fail"
+            to="/providers"
           />
           <StatCard
             label="Favorites online"
@@ -407,6 +414,8 @@ function StatCard({
   icon,
   accentColor,
   hint,
+  sub,
+  progress,
   to,
 }: {
   label: string;
@@ -414,6 +423,8 @@ function StatCard({
   icon: React.ReactNode;
   accentColor?: string;
   hint?: string;
+  sub?: string;
+  progress?: number | null;
   to?: string;
 }) {
   const clickable = !!to;
@@ -423,13 +434,29 @@ function StatCard({
   const friendlyValue =
     typeof value === "number" ? value.toString() : String(value);
   const ariaLabel = clickable
-    ? `${label} ${friendlyValue}${hint ? `, ${hint}` : ""}, 查看详情`
+    ? `${label} ${friendlyValue}${hint ? `, ${hint}` : ""}${sub ? `, ${sub}` : ""}, 查看详情`
     : `${label} ${friendlyValue}`;
   const inner = (
     <>
       <div className="label">{label}</div>
       <div className="value">{value}</div>
-      {hint && <div className="hint">{hint}</div>}
+      {progress != null && (
+        <div
+          className="stat-progress"
+          role="progressbar"
+          aria-valuenow={Math.round(progress)}
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-label={`${label} ${Math.round(progress)}%`}
+        >
+          <div
+            className="stat-progress-fill"
+            style={{ width: `${Math.max(0, Math.min(100, progress))}%` }}
+          />
+        </div>
+      )}
+      {sub && <div className="hint">{sub}</div>}
+      {hint && !sub && <div className="hint">{hint}</div>}
       <div className="stat-icon" aria-hidden="true">
         {icon}
       </div>

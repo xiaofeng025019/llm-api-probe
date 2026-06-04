@@ -1,4 +1,5 @@
 """Smoke test for the /healthz endpoint."""
+
 from __future__ import annotations
 
 import httpx

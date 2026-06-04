@@ -1,4 +1,5 @@
 """Tests for app.cli (test-data pattern matching + cleanup command)."""
+
 from __future__ import annotations
 
 from app.cli import _looks_like_test_data

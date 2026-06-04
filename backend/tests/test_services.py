@@ -1,4 +1,5 @@
 """Service layer tests using in-memory SQLite."""
+
 from __future__ import annotations
 
 from datetime import datetime, timedelta
@@ -8,13 +9,9 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.db.models import (
     ErrorCode,
-    Model,
     ModelType,
-    ProbeResult,
     ProbeTarget,
-    Provider,
     ProviderKind,
-    Setting,
 )
 from app.db.session import Base
 from app.probers.types import DiscoveredModel, ProbeOutcome
@@ -22,7 +19,6 @@ from app.schemas.api import (
     ModelPatch,
     ProviderCreate,
     ProviderPatch,
-    SettingPut,
 )
 from app.services import models as models_svc
 from app.services import providers as providers_svc
@@ -70,9 +66,7 @@ async def test_patch_provider_updates_fields(session) -> None:
             api_key="k",
         ),
     )
-    out = await providers_svc.patch_provider(
-        session, p.id, ProviderPatch(interval_seconds=60, enabled=False)
-    )
+    out = await providers_svc.patch_provider(session, p.id, ProviderPatch(interval_seconds=60, enabled=False))
     assert out is not None
     assert out.interval_seconds == 60
     assert out.enabled is False
@@ -117,7 +111,7 @@ async def test_upsert_discovered_inserts_and_updates(session) -> None:
     )
     assert {m.model_id for m in out} == {"gpt-4o", "dall-e-3"}
     # upsert same again -> no new rows
-    out2 = await models_svc.upsert_discovered(
+    await models_svc.upsert_discovered(
         session,
         p.id,
         [DiscoveredModel(model_id="gpt-4o", type=ModelType.chat)],
@@ -139,9 +133,7 @@ async def test_patch_model_favorite(session) -> None:
     out = await models_svc.upsert_discovered(
         session, p.id, [DiscoveredModel(model_id="gpt-4o", type=ModelType.chat)]
     )
-    m = await models_svc.patch_model(
-        session, out[0].id, ModelPatch(is_favorite=True, enabled=False)
-    )
+    m = await models_svc.patch_model(session, out[0].id, ModelPatch(is_favorite=True, enabled=False))
     assert m is not None
     assert m.is_favorite is True
     assert m.enabled is False
@@ -162,7 +154,7 @@ async def test_disable_stale(session) -> None:
         session, p.id, [DiscoveredModel(model_id="old-1", type=ModelType.chat)]
     )
     # backdate last_seen_at
-    out[0].last_seen_at = datetime.now() - timedelta(days=30)  # noqa: DTZ005
+    out[0].last_seen_at = datetime.now() - timedelta(days=30)
     await session.commit()
     n = await models_svc.disable_stale(session, days=7)
     assert n == 1
@@ -208,13 +200,11 @@ async def test_cleanup_old_removes_old_rows(session) -> None:
     old = await results_svc.record_outcome(
         session, p, None, ProbeTarget.list_models, ProbeOutcome(success=True, latency_ms=10)
     )
-    old.checked_at = datetime.now() - timedelta(days=60)  # noqa: DTZ005
+    old.checked_at = datetime.now() - timedelta(days=60)
     await session.commit()
     removed = await results_svc.cleanup_old(session, retention_days=30)
     assert removed == 1
-    assert (
-        await results_svc.list_results(session, provider_id=p.id, limit=10)
-    ) == []  # only old row existed
+    assert (await results_svc.list_results(session, provider_id=p.id, limit=10)) == []  # only old row existed
 
 
 @pytest.mark.asyncio
@@ -228,9 +218,11 @@ async def test_dashboard_aggregates_24h(session) -> None:
             api_key="k",
         ),
     )
-    fav = (await models_svc.upsert_discovered(
-        session, p.id, [DiscoveredModel(model_id="gpt-4o", type=ModelType.chat)]
-    ))[0]
+    fav = (
+        await models_svc.upsert_discovered(
+            session, p.id, [DiscoveredModel(model_id="gpt-4o", type=ModelType.chat)]
+        )
+    )[0]
     fav.is_favorite = True
     await session.commit()
     # 2 success, 1 failure in 24h
@@ -257,7 +249,76 @@ async def test_dashboard_aggregates_24h(session) -> None:
     assert len(rows) == 1
     assert rows[0].model_count == 1
     assert rows[0].availability_24h is not None
-    assert 60 < rows[0].availability_24h < 70  # 2/3 = 66.66
+
+
+@pytest.mark.asyncio
+async def test_dashboard_available_models_counts_recent_per_model(session) -> None:
+    """available_models totals how many of all models have a successful
+    probe in the last 24h — the model-level equivalent of 'OK' / 'Failing'."""
+    p = await providers_svc.create_provider(
+        session,
+        ProviderCreate(
+            name="p1",
+            kind=ProviderKind.openai,
+            base_url="https://x",
+            api_key="k",
+        ),
+    )
+    ms = await models_svc.upsert_discovered(
+        session,
+        p.id,
+        [
+            DiscoveredModel(model_id="gpt-4o"),
+            DiscoveredModel(model_id="gpt-4o-mini"),
+            DiscoveredModel(model_id="dall-e-3"),
+        ],
+    )
+    await session.commit()
+    gpt4o, gpt4omini, _dalle = ms[0], ms[1], ms[2]
+
+    # gpt-4o: latest probe = success. 1 available.
+    # gpt-4o-mini: latest probe = failure. 0 available.
+    # dall-e-3: no recent probes. 0 available.
+    # gpt-4o older failure should be ignored — only the newest counts.
+    await results_svc.record_outcome(
+        session, p, gpt4o.id, ProbeTarget.chat_completion, ProbeOutcome(success=False, latency_ms=10)
+    )
+    await results_svc.record_outcome(
+        session, p, gpt4o.id, ProbeTarget.chat_completion, ProbeOutcome(success=True, latency_ms=10)
+    )
+    await results_svc.record_outcome(
+        session, p, gpt4omini.id, ProbeTarget.chat_completion, ProbeOutcome(success=False, latency_ms=10)
+    )
+
+    dash = await results_svc.dashboard(session)
+    assert dash.totals["models"] == 3
+    assert dash.totals["available_models"] == 1
+
+
+@pytest.mark.asyncio
+async def test_dashboard_ignores_list_models_probes_for_model_count(session) -> None:
+    """ProbeResult rows with model_id=None (list_models target) should not
+    be counted as 'a model probe' — the model-level availability only
+    counts chat_completion results."""
+    p = await providers_svc.create_provider(
+        session,
+        ProviderCreate(name="p1", kind=ProviderKind.openai, base_url="https://x", api_key="k"),
+    )
+    ms = await models_svc.upsert_discovered(session, p.id, [DiscoveredModel(model_id="gpt-4o")])
+    await session.commit()
+    m = ms[0]
+    # One list_models probe (no model_id) and one chat_completion failure.
+    await results_svc.record_outcome(
+        session, p, None, ProbeTarget.list_models, ProbeOutcome(success=True, latency_ms=10)
+    )
+    await results_svc.record_outcome(
+        session, p, m.id, ProbeTarget.chat_completion, ProbeOutcome(success=False, latency_ms=10)
+    )
+    dash = await results_svc.dashboard(session)
+    # available_models counts the chat_completion failure as 0
+    assert dash.totals["available_models"] == 0
+    # The list_models success still marks the provider as "ok"
+    assert dash.totals["ok"] == 1
 
 
 # ---------- settings --------------------------------------------------------

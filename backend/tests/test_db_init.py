@@ -1,4 +1,5 @@
 """Verify init_db applies migrations and seeds default settings."""
+
 from __future__ import annotations
 
 import os
@@ -63,9 +64,7 @@ async def test_init_db_runs_migrations_and_seeds_defaults(file_db: str) -> None:
         } <= names
 
         # alembic_version records the head revision
-        ver = (
-            await session.execute(text("SELECT version_num FROM alembic_version"))
-        ).scalar()
+        ver = (await session.execute(text("SELECT version_num FROM alembic_version"))).scalar()
         assert ver is not None
 
     await engine.dispose()
@@ -87,9 +86,7 @@ async def test_init_db_is_idempotent(file_db: str) -> None:
         from sqlalchemy import text
 
         # Exactly one alembic_version row
-        n = (
-            await session.execute(text("SELECT COUNT(*) FROM alembic_version"))
-        ).scalar()
+        n = (await session.execute(text("SELECT COUNT(*) FROM alembic_version"))).scalar()
         assert n == 1
 
     await engine.dispose()

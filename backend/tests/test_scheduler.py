@@ -1,7 +1,6 @@
 """Scheduler integration test using a tiny interval and respx-mocked httpx."""
-from __future__ import annotations
 
-import asyncio
+from __future__ import annotations
 
 import httpx
 import pytest
@@ -10,7 +9,6 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.core.scheduler import (
     _run_probe,
-    get_scheduler,
     sync_jobs_for_provider,
     trigger_now,
 )
@@ -63,9 +61,7 @@ async def test_run_probe_records_outcome_and_upserts_model(env) -> None:
 async def test_run_probe_handles_timeout_failure(env) -> None:
     # seed a model
     async with env["sm"]() as s:
-        ms = await models_svc.upsert_discovered(
-            s, env["provider_id"], [DiscoveredModel(model_id="gpt-4o")]
-        )
+        ms = await models_svc.upsert_discovered(s, env["provider_id"], [DiscoveredModel(model_id="gpt-4o")])
         await s.commit()
         model_id = ms[0].id
 
@@ -84,8 +80,9 @@ async def test_run_probe_handles_timeout_failure(env) -> None:
 
 @pytest.mark.asyncio
 async def test_sync_jobs_adds_and_removes(env) -> None:
-    from app.core import scheduler as sched_mod
     from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
+
+    from app.core import scheduler as sched_mod
 
     sched_mod._scheduler = None
     sched = sched_mod.get_scheduler()
@@ -126,9 +123,7 @@ async def test_trigger_now_returns_true_when_enabled(env) -> None:
 @pytest.mark.asyncio
 async def test_trigger_now_returns_false_for_disabled_model(env) -> None:
     async with env["sm"]() as s:
-        ms = await models_svc.upsert_discovered(
-            s, env["provider_id"], [DiscoveredModel(model_id="gpt-4o")]
-        )
+        ms = await models_svc.upsert_discovered(s, env["provider_id"], [DiscoveredModel(model_id="gpt-4o")])
         await s.commit()
         model_id = ms[0].id
         # disable the model
@@ -136,4 +131,3 @@ async def test_trigger_now_returns_false_for_disabled_model(env) -> None:
         m.enabled = False
         await s.commit()
     assert await trigger_now(env["provider_id"], model_id, session_maker=env["sm"]) is False
-

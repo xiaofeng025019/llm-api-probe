@@ -69,8 +69,34 @@ async def dashboard(session: AsyncSession) -> DashboardOut:
     cutoff_24h = now - timedelta(hours=24)
 
     providers = list((await session.execute(select(Provider).order_by(Provider.id))).scalars().all())
+
+    # Single query to compute "most recent probe result per model" in the
+    # past 24h. ORDER BY checked_at DESC, then we keep the first row seen
+    # per model_id. Done in Python instead of a window function so it works
+    # on every SQLite version without ROW_NUMBER().
+    recent_per_model: dict[int, bool] = {}
+    rows = (
+        await session.execute(
+            select(ProbeResult.model_id, ProbeResult.success, ProbeResult.checked_at)
+            .where(ProbeResult.model_id.is_not(None), ProbeResult.checked_at >= cutoff_24h)
+            .order_by(ProbeResult.checked_at.desc())
+        )
+    ).all()
+    for model_id, success, _ in rows:
+        if model_id is None or model_id in recent_per_model:
+            continue
+        recent_per_model[model_id] = bool(success)
+
     out: list[DashboardProvider] = []
-    totals = {"providers": 0, "models": 0, "ok": 0, "failing": 0, "favorites_online": 0, "favorites_total": 0}
+    totals = {
+        "providers": 0,
+        "models": 0,
+        "ok": 0,
+        "failing": 0,
+        "available_models": 0,  # NEW: model-level availability counts
+        "favorites_online": 0,
+        "favorites_total": 0,
+    }
 
     for p in providers:
         models = list((await session.execute(select(Model).where(Model.provider_id == p.id))).scalars().all())
@@ -133,6 +159,11 @@ async def dashboard(session: AsyncSession) -> DashboardOut:
             totals["ok"] += 1
         elif last_row:
             totals["failing"] += 1
+        # Model-level: count how many of this provider's models had a
+        # successful probe in the last 24h.
+        for m in models:
+            if recent_per_model.get(m.id):
+                totals["available_models"] += 1
         totals["favorites_total"] += len(favorites)
         totals["favorites_online"] += online
 

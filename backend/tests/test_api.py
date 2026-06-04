@@ -1,8 +1,6 @@
 """End-to-end API tests using httpx.ASGITransport with patched DB engine."""
-from __future__ import annotations
 
-from contextlib import asynccontextmanager
-from typing import Any
+from __future__ import annotations
 
 import httpx
 import pytest
@@ -10,7 +8,7 @@ import respx
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.core import scheduler as sched_mod
-from app.db.session import Base, get_session_maker, set_session_maker
+from app.db.session import Base, set_session_maker
 from app.main import app
 
 
@@ -115,9 +113,7 @@ async def test_sync_models_creates_models(api_client: httpx.AsyncClient) -> None
 
     with respx.mock:
         respx.get("https://api.openai.com/v1/models").mock(
-            return_value=httpx.Response(
-                200, json={"data": [{"id": "gpt-4o"}, {"id": "dall-e-3"}]}
-            )
+            return_value=httpx.Response(200, json={"data": [{"id": "gpt-4o"}, {"id": "dall-e-3"}]})
         )
         r = await api_client.post(f"/api/v1/providers/{pid}/sync-models")
     assert r.status_code == 200, r.text
@@ -245,5 +241,5 @@ async def test_probe_run_triggers(api_client: httpx.AsyncClient) -> None:
     ).json()["data"]["id"]
     r = await api_client.post(f"/api/v1/probe/run?provider_id={pid}")
     assert r.status_code == 200
-    r = await api_client.post(f"/api/v1/probe/run?provider_id=9999")
+    r = await api_client.post("/api/v1/probe/run?provider_id=9999")
     assert r.status_code == 404
