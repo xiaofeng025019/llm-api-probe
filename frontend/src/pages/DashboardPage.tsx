@@ -77,7 +77,7 @@ export function DashboardPage() {
             to="/providers"
           />
           <StatCard
-            label="Available"
+            label="Available Models"
             value={
               dashboard.totals.models > 0
                 ? `${dashboard.totals.available_models ?? 0} / ${dashboard.totals.models}`
@@ -98,15 +98,20 @@ export function DashboardPage() {
             to="/providers"
           />
           <StatCard
-            label="Favorites online"
+            label="Favorite Models"
             value={`${dashboard.totals.favorites_online} / ${dashboard.totals.favorites_total}`}
             icon={<IconStarOutline filled />}
             accentColor="var(--warn)"
             to="/models"
-            hint={
+            sub={
               dashboard.totals.favorites_total === 0
-                ? "未收藏任何模型"
+                ? "未收藏任何 model"
                 : `${Math.round((dashboard.totals.favorites_online / Math.max(1, dashboard.totals.favorites_total)) * 100)}% 在线`
+            }
+            progress={
+              dashboard.totals.favorites_total > 0
+                ? (dashboard.totals.favorites_online / dashboard.totals.favorites_total) * 100
+                : null
             }
           />
         </div>
