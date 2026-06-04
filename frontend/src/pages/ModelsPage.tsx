@@ -14,23 +14,23 @@ export function ModelsPage() {
 
   const allFavorites = useMemo(() => {
     const rows: Array<{
-      model_id: number;
+      model_id: string;
       model: string;
       type: string;
-      provider_id: number;
+      provider_id: string;
       provider_name: string;
       last_seen_at: string;
     }> = [];
     for (const [pid, ms] of Object.entries(modelsByProvider)) {
-      const p = providers.find((x) => x.id === Number(pid));
+      const p = providers.find((x) => x.id === pid);
       for (const m of ms) {
         if (m.is_favorite) {
           rows.push({
             model_id: m.id,
             model: m.model_id,
             type: m.type,
-            provider_id: Number(pid),
-            provider_name: p?.name ?? String(pid),
+            provider_id: pid,
+            provider_name: p?.name ?? pid,
             last_seen_at: m.last_seen_at,
           });
         }

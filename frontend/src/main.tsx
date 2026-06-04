@@ -15,8 +15,8 @@ import "./styles.css";
 function GlobalSse() {
   useSse((event, data) => {
     if (event === "job.error" && data && typeof data === "object") {
-      const d = data as { provider_id: number; model_id: number | null; message: string };
-      pushToast("fail", `Provider #${d.provider_id} failed`, d.message ?? "unknown error");
+      const d = data as { provider_id: string; model_id: string | null; message: string };
+      pushToast("fail", `Provider ${d.provider_id.slice(0, 8)}… failed`, d.message ?? "unknown error");
     }
   });
   return null;

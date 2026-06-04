@@ -9,7 +9,7 @@ export type ModelType =
   | "unknown";
 
 export interface Provider {
-  id: number;
+  id: string;
   name: string;
   kind: ProviderKind;
   base_url: string;
@@ -23,8 +23,8 @@ export interface Provider {
 }
 
 export interface ModelOut {
-  id: number;
-  provider_id: number;
+  id: string;
+  provider_id: string;
   model_id: string;
   display_name: string | null;
   type: ModelType;
@@ -34,7 +34,7 @@ export interface ModelOut {
 }
 
 export interface DashboardFavoriteModel {
-  id: number;
+  id: string;
   model_id: string;
   display_name: string | null;
   type: ModelType;
@@ -49,7 +49,7 @@ export interface DashboardFavoriteModel {
 }
 
 export interface DashboardProvider {
-  provider_id: number;
+  provider_id: string;
   name: string;
   kind: ProviderKind;
   enabled: boolean;
@@ -84,9 +84,9 @@ export interface Dashboard {
 }
 
 export interface ProbeResult {
-  id: number;
-  provider_id: number;
-  model_id: number | null;
+  id: string;
+  provider_id: string;
+  model_id: string | null;
   target: "list_models" | "chat_completion";
   success: boolean;
   http_status: number | null;
@@ -125,17 +125,17 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 export const api = {
   dashboard: () => request<Dashboard>("/api/v1/dashboard"),
   providers: () => request<Provider[]>("/api/v1/providers"),
-  getProvider: (id: number) => request<Provider>(`/api/v1/providers/${id}`),
-  patchProvider: (id: number, body: Partial<Provider>) =>
+  getProvider: (id: string) => request<Provider>(`/api/v1/providers/${id}`),
+  patchProvider: (id: string, body: Partial<Provider>) =>
     request<Provider>(`/api/v1/providers/${id}`, {
       method: "PATCH",
       body: JSON.stringify(body),
     }),
-  syncModels: (id: number) =>
+  syncModels: (id: string) =>
     request<ModelOut[]>(`/api/v1/providers/${id}/sync-models`, { method: "POST" }),
-  runNow: (id: number) =>
+  runNow: (id: string) =>
     request<{ scheduled: boolean }>(`/api/v1/providers/${id}/run`, { method: "POST" }),
-  patchModel: (id: number, body: { is_favorite?: boolean; enabled?: boolean }) =>
+  patchModel: (id: string, body: { is_favorite?: boolean; enabled?: boolean }) =>
     request<ModelOut>(`/api/v1/models/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
   createProvider: (body: {
     name: string;
@@ -149,10 +149,10 @@ export const api = {
     enabled?: boolean;
   }) =>
     request<Provider>("/api/v1/providers", { method: "POST", body: JSON.stringify(body) }),
-  deleteProvider: (id: number) =>
-    request<{ deleted: number }>(`/api/v1/providers/${id}`, { method: "DELETE" }),
-  models: (id: number) => request<ModelOut[]>(`/api/v1/providers/${id}/models`),
-  results: (params: { provider_id?: number; model_id?: number; hours?: number; limit?: number } = {}) => {
+  deleteProvider: (id: string) =>
+    request<{ deleted: string }>(`/api/v1/providers/${id}`, { method: "DELETE" }),
+  models: (id: string) => request<ModelOut[]>(`/api/v1/providers/${id}/models`),
+  results: (params: { provider_id?: string; model_id?: string; hours?: number; limit?: number } = {}) => {
     const q = new URLSearchParams();
     if (params.provider_id != null) q.set("provider_id", String(params.provider_id));
     if (params.model_id != null) q.set("model_id", String(params.model_id));
@@ -173,7 +173,7 @@ export const api = {
       "/api/v1/import",
       { method: "POST", body: JSON.stringify(payload) },
     ),
-  probeNow: (providerId?: number, modelId?: number) => {
+  probeNow: (providerId?: string, modelId?: string) => {
     const q = new URLSearchParams();
     if (providerId != null) q.set("provider_id", String(providerId));
     if (modelId != null) q.set("model_id", String(modelId));

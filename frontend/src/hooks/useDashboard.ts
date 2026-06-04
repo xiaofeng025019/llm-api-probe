@@ -5,7 +5,7 @@ import { useSse } from "./useSse";
 export interface DashboardState {
   dashboard: Dashboard | null;
   providers: Provider[];
-  modelsByProvider: Record<number, ModelOut[]>;
+  modelsByProvider: Record<string, ModelOut[]>;
   settings: Setting[];
   loading: boolean;
   error: string | null;
@@ -15,7 +15,7 @@ export interface DashboardState {
 export function useDashboard(autoRefreshOnSse = true): DashboardState {
   const [dashboard, setDashboard] = useState<Dashboard | null>(null);
   const [providers, setProviders] = useState<Provider[]>([]);
-  const [modelsByProvider, setModelsByProvider] = useState<Record<number, ModelOut[]>>({});
+  const [modelsByProvider, setModelsByProvider] = useState<Record<string, ModelOut[]>>({});
   const [settings, setSettings] = useState<Setting[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);

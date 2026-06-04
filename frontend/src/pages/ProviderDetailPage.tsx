@@ -35,7 +35,7 @@ const WINDOWS: Array<{ label: string; hours: number }> = [
 
 export function ProviderDetailPage() {
   const { id } = useParams<{ id: string }>();
-  const providerId = Number(id);
+  const providerId = id!;
   const nav = useNavigate();
 
   const [provider, setProvider] = useState<Provider | null>(null);
@@ -47,7 +47,7 @@ export function ProviderDetailPage() {
   const [error, setError] = useState<string | null>(null);
 
   async function refresh() {
-    if (!Number.isFinite(providerId)) return;
+    if (!providerId) return;
     try {
       const [p, ms, rs, statusRs, ss] = await Promise.all([
         api.getProvider(providerId),
@@ -78,7 +78,7 @@ export function ProviderDetailPage() {
   });
 
   const latestResultByModel = useMemo(() => {
-    const byModel = new Map<number, ProbeResult>();
+    const byModel = new Map<string, ProbeResult>();
     for (const r of modelStatusResults) {
       if (r.model_id == null || r.target !== "chat_completion") continue;
       if (!byModel.has(r.model_id)) byModel.set(r.model_id, r);

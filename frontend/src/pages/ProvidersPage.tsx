@@ -16,9 +16,9 @@ export function ProvidersPage() {
   const { providers, dashboard, modelsByProvider, settings, refresh } = useDashboard();
   const [showAdd, setShowAdd] = useState(false);
   const [editing, setEditing] = useState<Provider | null>(null);
-  const [runningProviders, setRunningProviders] = useState<Record<number, boolean>>({});
-  const [syncingProviders, setSyncingProviders] = useState<Record<number, boolean>>({});
-  const [togglingProviders, setTogglingProviders] = useState<Record<number, boolean>>({});
+  const [runningProviders, setRunningProviders] = useState<Record<string, boolean>>({});
+  const [syncingProviders, setSyncingProviders] = useState<Record<string, boolean>>({});
+  const [togglingProviders, setTogglingProviders] = useState<Record<string, boolean>>({});
   const [params, setParams] = useSearchParams();
 
   // URL-driven filter state: ?status=ok|fail&favorites=1

@@ -53,7 +53,7 @@ function modelStatusLabel(model: DashboardFavoriteModel): string {
 export function DashboardPage() {
   const nav = useNavigate();
   const { dashboard, providers, settings, loading, error, refresh } = useDashboard();
-  const [runningProviders, setRunningProviders] = useState<Record<number, boolean>>({});
+  const [runningProviders, setRunningProviders] = useState<Record<string, boolean>>({});
   const [showAddProvider, setShowAddProvider] = useState(false);
   const activeDashboardProviders = dashboard?.providers.filter((p) => p.enabled) ?? [];
   const statusIntervalLabel = modelStatusIntervalLabel(settings);
@@ -439,7 +439,7 @@ function FavoriteModelStatus({
   onRefresh,
 }: {
   model: DashboardFavoriteModel;
-  providerId: number;
+  providerId: string;
   providerName: string;
   onRefresh: () => Promise<void>;
 }) {
