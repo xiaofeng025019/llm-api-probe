@@ -16,6 +16,27 @@ import { CountUp } from "../components/CountUp";
 import { Skeleton, SkeletonProviderCard, SkeletonStat } from "../components/Skeleton";
 import { pushToast } from "../components/Toast";
 
+/** Build the secondary line for the Favorite Models card. Includes a
+ *  delta vs 24h ago when the backend supplies favorites_online_24h_ago
+ *  (newer backends); older backends fall back to the static percent. */
+function favoritesSub(totals: {
+  favorites_total: number;
+  favorites_online: number;
+  favorites_online_24h_ago?: number;
+}): string {
+  if (totals.favorites_total === 0) return "未收藏任何 model";
+  const pct = Math.round(
+    (totals.favorites_online / Math.max(1, totals.favorites_total)) * 100,
+  );
+  const base = `${pct}% 在线`;
+  if (totals.favorites_online_24h_ago == null) return base;
+  const delta = totals.favorites_online - totals.favorites_online_24h_ago;
+  if (delta === 0) return `${base} · 与 24h 前持平`;
+  const sign = delta > 0 ? "↑" : "↓";
+  const word = Math.abs(delta) === 1 ? "个" : "个";
+  return `${base} · ${sign}${Math.abs(delta)} ${word} vs 24h 前`;
+}
+
 export function DashboardPage() {
   const nav = useNavigate();
   const { dashboard, providers, loading, error, refresh } = useDashboard();
@@ -103,11 +124,7 @@ export function DashboardPage() {
             icon={<IconStarOutline filled />}
             accentColor="var(--warn)"
             to="/models"
-            sub={
-              dashboard.totals.favorites_total === 0
-                ? "未收藏任何 model"
-                : `${Math.round((dashboard.totals.favorites_online / Math.max(1, dashboard.totals.favorites_total)) * 100)}% 在线`
-            }
+            sub={favoritesSub(dashboard.totals)}
             progress={
               dashboard.totals.favorites_total > 0
                 ? (dashboard.totals.favorites_online / dashboard.totals.favorites_total) * 100

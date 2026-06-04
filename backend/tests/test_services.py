@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from app.db.models import (
     ErrorCode,
     ModelType,
+    ProbeResult,
     ProbeTarget,
     ProviderKind,
 )
@@ -295,6 +296,83 @@ async def test_dashboard_available_models_counts_recent_per_model(session) -> No
     dash = await results_svc.dashboard(session)
     assert dash.totals["models"] == 3
     assert dash.totals["available_models"] == 1
+
+
+@pytest.mark.asyncio
+async def test_dashboard_favorites_delta_24h_ago(session) -> None:
+    """favorites_online_24h_ago is 'how many favorites were online at
+    the time the 24h window started', so a model that's been up the
+    whole time counts in both 'now' and '24h ago'."""
+    p = await providers_svc.create_provider(
+        session,
+        ProviderCreate(name="p1", kind=ProviderKind.openai, base_url="https://x", api_key="k"),
+    )
+    ms = await models_svc.upsert_discovered(
+        session,
+        p.id,
+        [DiscoveredModel(model_id="fav-stable"), DiscoveredModel(model_id="fav-flipped")],
+    )
+    for m in ms:
+        m.is_favorite = True
+    await session.commit()
+    fav_stable, fav_flipped = ms[0].id, ms[1].id
+
+    # 30h ago: BOTH favorites up. Use UTC-naive timestamps to match
+    # dashboard's UTC cutoff math (otherwise the test passes/fails
+    # depending on the host's local timezone).
+
+    base_old = datetime.now(UTC).replace(tzinfo=None) - timedelta(hours=30)
+    # Now: stable is up, flipped is down.
+    base_now = datetime.now(UTC).replace(tzinfo=None)
+
+    session.add(
+        ProbeResult(
+            provider_id=p.id,
+            model_id=fav_stable,
+            target=ProbeTarget.chat_completion,
+            success=True,
+            latency_ms=10,
+            checked_at=base_old,
+        )
+    )
+    session.add(
+        ProbeResult(
+            provider_id=p.id,
+            model_id=fav_flipped,
+            target=ProbeTarget.chat_completion,
+            success=True,
+            latency_ms=10,
+            checked_at=base_old,
+        )
+    )
+    session.add(
+        ProbeResult(
+            provider_id=p.id,
+            model_id=fav_stable,
+            target=ProbeTarget.chat_completion,
+            success=True,
+            latency_ms=10,
+            checked_at=base_now,
+        )
+    )
+    session.add(
+        ProbeResult(
+            provider_id=p.id,
+            model_id=fav_flipped,
+            target=ProbeTarget.chat_completion,
+            success=False,
+            latency_ms=10,
+            checked_at=base_now + timedelta(seconds=1),
+        )
+    )
+    await session.commit()
+
+    dash = await results_svc.dashboard(session)
+    # Current: 1/2 (stable up, flipped down).
+    assert dash.totals["favorites_online"] == 1
+    assert dash.totals["favorites_total"] == 2
+    # 24h ago: 2/2 (both up before the recent failure).
+    assert dash.totals["favorites_online_24h_ago"] == 2
 
 
 @pytest.mark.asyncio

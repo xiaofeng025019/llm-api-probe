@@ -87,15 +87,36 @@ async def dashboard(session: AsyncSession) -> DashboardOut:
             continue
         recent_per_model[model_id] = bool(success)
 
+    # Pre-24h snapshot for the Favorite Models delta: which favorites
+    # were online (latest success) at the time the 24h window started?
+    # Same per-model dedup trick as recent_per_model, but bounded above
+    # by cutoff_24h instead of below.
+    pre_24h_per_model: dict[int, bool] = {}
+    pre_rows = (
+        await session.execute(
+            select(ProbeResult.model_id, ProbeResult.success, ProbeResult.checked_at)
+            .where(
+                ProbeResult.model_id.is_not(None),
+                ProbeResult.checked_at < cutoff_24h,
+            )
+            .order_by(ProbeResult.checked_at.desc())
+        )
+    ).all()
+    for model_id, success, _ in pre_rows:
+        if model_id is None or model_id in pre_24h_per_model:
+            continue
+        pre_24h_per_model[model_id] = bool(success)
+
     out: list[DashboardProvider] = []
     totals = {
         "providers": 0,
         "models": 0,
         "ok": 0,
         "failing": 0,
-        "available_models": 0,  # NEW: model-level availability counts
+        "available_models": 0,
         "favorites_online": 0,
         "favorites_total": 0,
+        "favorites_online_24h_ago": 0,  # for delta display
     }
 
     for p in providers:
@@ -154,6 +175,10 @@ async def dashboard(session: AsyncSession) -> DashboardOut:
         for m in models:
             if recent_per_model.get(m.id):
                 totals["available_models"] += 1
+        # Pre-24h favorites online (used to compute the delta vs current).
+        for m in favorites:
+            if pre_24h_per_model.get(m.id):
+                totals["favorites_online_24h_ago"] += 1
         totals["favorites_total"] += len(favorites)
         totals["favorites_online"] += online
 
