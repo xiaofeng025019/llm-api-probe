@@ -1,43 +1,24 @@
 import { useNavigate, Link } from "react-router-dom";
 import { useDashboard } from "../hooks/useDashboard";
-import { formatPercent, formatRelative, modelTypeBg, statusColor } from "../lib/format";
+import { formatPercent, formatRelative, statusColor } from "../lib/format";
 import { api, type Provider } from "../api/types";
 import { withErrorToast } from "../lib/action";
 import {
-  IconPlus,
   IconPlay,
   IconRefresh,
   IconDelete,
   IconServer,
-  IconModels,
   IconCheck,
-  IconAlert,
   IconStarOutline,
-  IconTypeChat,
-  IconTypeVision,
-  IconTypeAudio,
-  IconTypeImage,
-  IconTypeEmbedding,
-  IconTypeCode,
   KindIcon,
 } from "../components/Icons";
 import { CountUp } from "../components/CountUp";
 import { Skeleton, SkeletonProviderCard, SkeletonStat } from "../components/Skeleton";
-import { Ring } from "../components/Ring";
 import { pushToast } from "../components/Toast";
-
-const TYPE_ICONS: Record<string, React.ReactNode> = {
-  chat: <IconTypeChat />,
-  vision: <IconTypeVision />,
-  audio: <IconTypeAudio />,
-  image: <IconTypeImage />,
-  embedding: <IconTypeEmbedding />,
-  code: <IconTypeCode />,
-};
 
 export function DashboardPage() {
   const nav = useNavigate();
-  const { dashboard, providers, modelsByProvider, loading, error, refresh } = useDashboard();
+  const { dashboard, providers, loading, error, refresh } = useDashboard();
 
   async function onDelete(p: Provider) {
     if (!confirm(`删除 provider ${p.name}?`)) return;
@@ -93,13 +74,6 @@ export function DashboardPage() {
             value={dashboard.totals.providers}
             icon={<IconServer />}
             accentColor="var(--primary)"
-            to="/providers"
-          />
-          <StatCard
-            label="Models"
-            value={dashboard.totals.models}
-            icon={<IconModels />}
-            accentColor="var(--info)"
             to="/providers"
           />
           <StatCard
@@ -313,94 +287,8 @@ export function DashboardPage() {
               onClick={() => nav("/providers")}
               style={{ marginTop: 12 }}
             >
-              <IconPlus />
               添加 Provider
             </button>
-          </div>
-        </div>
-      )}
-
-      {Object.keys(modelsByProvider).length > 0 && (
-        <div className="section">
-          <div className="section-header">
-            <div className="section-title">
-              <IconModels />
-              Models
-            </div>
-            <span className="muted">
-              <CountUp value={Object.values(modelsByProvider).reduce((n, ms) => n + ms.length, 0)} /> 个
-            </span>
-          </div>
-          <div className="table-wrap fade-up">
-            <table>
-              <thead>
-                <tr>
-                  <th style={{ width: 50 }} scope="col">
-                    <span className="sr-only">Favorite</span>
-                  </th>
-                  <th scope="col">Model</th>
-                  <th scope="col">Provider</th>
-                  <th scope="col">Type</th>
-                  <th scope="col">状态</th>
-                </tr>
-              </thead>
-              <tbody>
-                {Object.entries(modelsByProvider).flatMap(([pid, ms]) => {
-                  const p = providers.find((x) => x.id === Number(pid));
-                  return ms.map((m) => (
-                    <tr key={m.id}>
-                      <td>
-                        <button
-                          className={`favorite-star ${m.is_favorite ? "active" : ""}`}
-                          onClick={() =>
-                            withErrorToast(
-                              api.patchModel(m.id, { is_favorite: !m.is_favorite }),
-                              "收藏切换",
-                            ).then(refresh)
-                          }
-                          aria-label={m.is_favorite ? "取消收藏" : "收藏"}
-                          aria-pressed={m.is_favorite}
-                        >
-                          <IconStarOutline filled={m.is_favorite} />
-                        </button>
-                      </td>
-                      <td>
-                        <strong>{m.model_id}</strong>
-                      </td>
-                      <td>
-                        <a
-                          href={`/providers/${pid}`}
-                          onClick={(e) => {
-                            e.preventDefault();
-                            nav(`/providers/${pid}`);
-                          }}
-                        >
-                          {p?.name ?? pid}
-                        </a>
-                      </td>
-                      <td>
-                        <span
-                          className="type-icon"
-                          style={{ background: modelTypeBg(m.type) }}
-                        >
-                          {TYPE_ICONS[m.type] ?? null}
-                          <span>{m.type}</span>
-                        </span>
-                      </td>
-                      <td>
-                        {m.enabled ? (
-                          <span className="pill ok">
-                            <IconCheck /> enabled
-                          </span>
-                        ) : (
-                          <span className="pill">disabled</span>
-                        )}
-                      </td>
-                    </tr>
-                  ));
-                })}
-              </tbody>
-            </table>
           </div>
         </div>
       )}
@@ -514,6 +402,3 @@ function StatCard({
     </Link>
   );
 }
-
-// Re-export so other pages can reuse
-export { Ring };
