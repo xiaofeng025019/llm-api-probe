@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload
 
 from app.db.models import Model, ModelType, Provider
+from app.db.uuid import uuid_equals
 from app.probers.types import DiscoveredModel
 from app.schemas.api import ModelPatch
 
@@ -19,7 +20,7 @@ async def list_models(
 ) -> list[Model]:
     """List all models for a provider (by provider UUID), optionally including soft-deleted."""
     # First get the provider to get its integer ID
-    provider = await session.scalar(select(Provider).where(Provider.uuid_id == provider_id))
+    provider = await session.scalar(select(Provider).where(uuid_equals(Provider.uuid_id, provider_id)))
     if provider is None:
         return []
 
@@ -39,7 +40,7 @@ async def get_model(
     session: AsyncSession, model_id: uuid.UUID, include_deleted: bool = False
 ) -> Model | None:
     """Get a model by UUID, optionally including soft-deleted."""
-    query = select(Model).where(Model.uuid_id == model_id)
+    query = select(Model).where(uuid_equals(Model.uuid_id, model_id))
     if not include_deleted:
         query = query.where(Model.deleted_at.is_(None))
     res = await session.execute(query)
@@ -70,7 +71,7 @@ async def set_favorites(session: AsyncSession, provider_id: uuid.UUID, model_ids
     fields (type, display_name, last_seen_at) on the next sync.
     Returns the number of rows actually changed (set or cleared)."""
     # First get the provider to get its integer ID
-    provider = await session.scalar(select(Provider).where(Provider.uuid_id == provider_id))
+    provider = await session.scalar(select(Provider).where(uuid_equals(Provider.uuid_id, provider_id)))
     if provider is None:
         return 0
 
@@ -148,7 +149,7 @@ async def upsert_discovered(
 ) -> list[Model]:
     """Insert new models; update last_seen_at for existing; do not delete yet."""
     # First get the provider to get its integer ID
-    provider = await session.scalar(select(Provider).where(Provider.uuid_id == provider_id))
+    provider = await session.scalar(select(Provider).where(uuid_equals(Provider.uuid_id, provider_id)))
     if provider is None:
         return []
 

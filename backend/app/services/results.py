@@ -7,8 +7,10 @@ from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import joinedload
 
 from app.db.models import ErrorCode, Model, ProbeResult, ProbeTarget, Provider
+from app.db.uuid import uuid_equals
 from app.probers.types import ProbeOutcome
 from app.schemas.api import DashboardFavoriteModel, DashboardOut, DashboardProvider
 from app.services import settings as settings_svc
@@ -102,16 +104,21 @@ async def list_results(
     limit: int = 200,
 ) -> list[ProbeResult]:
     """List probe results, optionally filtered by provider/model UUID."""
-    stmt = select(ProbeResult).order_by(ProbeResult.checked_at.desc()).limit(limit)
+    stmt = (
+        select(ProbeResult)
+        .options(joinedload(ProbeResult.model), joinedload(ProbeResult.provider_rel))
+        .order_by(ProbeResult.checked_at.desc())
+        .limit(limit)
+    )
 
     if provider_id is not None:
         # Join with Provider to filter by UUID
         stmt = stmt.join(Provider, ProbeResult.provider_id == Provider.id).where(
-            Provider.uuid_id == provider_id
+            uuid_equals(Provider.uuid_id, provider_id)
         )
     if model_id is not None:
         # Join with Model to filter by UUID
-        stmt = stmt.join(Model, ProbeResult.model_id == Model.id).where(Model.uuid_id == model_id)
+        stmt = stmt.join(Model, ProbeResult.model_id == Model.id).where(uuid_equals(Model.uuid_id, model_id))
     if since is not None:
         stmt = stmt.where(ProbeResult.checked_at >= since)
 

@@ -9,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import Provider
+from app.db.uuid import uuid_equals
 from app.schemas.api import ProviderCreate, ProviderPatch
 
 
@@ -25,7 +26,7 @@ async def get_provider(
     session: AsyncSession, provider_id: uuid.UUID, include_deleted: bool = False
 ) -> Provider | None:
     """Get a provider by UUID, optionally including soft-deleted ones."""
-    query = select(Provider).where(Provider.uuid_id == provider_id)
+    query = select(Provider).where(uuid_equals(Provider.uuid_id, provider_id))
     if not include_deleted:
         query = query.where(Provider.deleted_at.is_(None))
     res = await session.execute(query)

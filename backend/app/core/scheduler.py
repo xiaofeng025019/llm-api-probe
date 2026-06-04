@@ -24,6 +24,7 @@ from app.db.models import (
     Provider,
 )
 from app.db.session import get_session_maker
+from app.db.uuid import uuid_equals
 from app.probers import get_prober
 from app.services import results as results_svc
 from app.services import settings as settings_svc
@@ -106,7 +107,9 @@ async def _run_probe(
     try:
         async with sm() as session:
             # Look up provider by UUID
-            result = await session.execute(select(Provider).where(Provider.uuid_id == provider_uuid))
+            result = await session.execute(
+                select(Provider).where(uuid_equals(Provider.uuid_id, provider_uuid))
+            )
             provider = result.scalar_one_or_none()
             if provider is None or not provider.enabled:
                 return
@@ -114,7 +117,9 @@ async def _run_probe(
             # Look up model by UUID if provided
             model: Model | None = None
             if model_uuid:
-                model_result = await session.execute(select(Model).where(Model.uuid_id == model_uuid))
+                model_result = await session.execute(
+                    select(Model).where(uuid_equals(Model.uuid_id, model_uuid))
+                )
                 model = model_result.scalar_one_or_none()
 
             if target == ProbeTarget.chat_completion:
@@ -216,7 +221,7 @@ async def sync_jobs_for_provider(provider_uuid: uuid.UUID, session_maker=None) -
     sched = get_scheduler()
     async with sm() as session:
         # Look up provider by UUID
-        result = await session.execute(select(Provider).where(Provider.uuid_id == provider_uuid))
+        result = await session.execute(select(Provider).where(uuid_equals(Provider.uuid_id, provider_uuid)))
         provider = result.scalar_one_or_none()
         if provider is None:
             # remove all jobs for this provider
@@ -319,13 +324,13 @@ async def trigger_now(provider_uuid: uuid.UUID, model_uuid: uuid.UUID | None, se
 
     async with sm() as session:
         # Look up provider by UUID
-        result = await session.execute(select(Provider).where(Provider.uuid_id == provider_uuid))
+        result = await session.execute(select(Provider).where(uuid_equals(Provider.uuid_id, provider_uuid)))
         provider = result.scalar_one_or_none()
         if provider is None or not provider.enabled:
             return False
         if target == ProbeTarget.chat_completion:
             if model_uuid:
-                result = await session.execute(select(Model).where(Model.uuid_id == model_uuid))
+                result = await session.execute(select(Model).where(uuid_equals(Model.uuid_id, model_uuid)))
                 model = result.scalar_one_or_none()
             else:
                 model = None

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from pathlib import Path
 
@@ -69,10 +68,11 @@ async def init_db(
     engine = engine or get_engine()
     sm = session_maker or get_session_maker()
 
-    # Migrations run on a sync engine (Alembic's design) and may take a
-    # while; run them in a worker thread so the event loop stays responsive.
+    # Migrations run on a sync engine (Alembic's design). Keep this
+    # synchronous: running Alembic in a worker thread can leave local SQLite
+    # startup stuck before the app begins accepting requests.
     try:
-        await asyncio.to_thread(_run_alembic_upgrade)
+        _run_alembic_upgrade()
     except Exception:
         log.exception("alembic upgrade head failed")
         raise
