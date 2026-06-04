@@ -121,22 +121,12 @@ async def dashboard(session: AsyncSession) -> DashboardOut:
         avg_lat_ms = int(avg_lat) if avg_lat is not None else None
 
         favorites = [m for m in models if m.is_favorite]
-        if favorites:
-            fav_ids = [m.id for m in favorites]
-            # A favorite is "online" if it had at least one successful probe in 24h.
-            online_count_q = (
-                select(ProbeResult.model_id)
-                .where(
-                    ProbeResult.model_id.in_(fav_ids),
-                    ProbeResult.checked_at >= cutoff_24h,
-                    ProbeResult.success.is_(True),
-                )
-                .distinct()
-            )
-            online_ids = {row[0] for row in (await session.execute(online_count_q)).all()}
-            online = len(online_ids)
-        else:
-            online = 0
+        # Use the same "most recent probe per model" semantics as
+        # available_models: a favorite is "online" iff its latest
+        # 24h probe succeeded. The previous distinct() logic counted
+        # any successful probe in the window, which double-counted
+        # a model that flipped from success → failure.
+        online = sum(1 for m in favorites if recent_per_model.get(m.id)) if favorites else 0
 
         out.append(
             DashboardProvider(

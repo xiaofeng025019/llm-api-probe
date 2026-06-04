@@ -225,8 +225,10 @@ async def test_dashboard_aggregates_24h(session) -> None:
     )[0]
     fav.is_favorite = True
     await session.commit()
-    # 2 success, 1 failure in 24h
-    for ok in (True, True, False):
+    # Order matters: favorites_online uses "most recent probe per
+    # model" semantics, so the LAST probe in the loop is the
+    # current state. End with success so the favorite is online.
+    for ok in (True, False, True):
         await results_svc.record_outcome(
             session,
             p,
