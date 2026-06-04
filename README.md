@@ -3,8 +3,9 @@
 本地部署的 LLM API 服务商可用性检测服务。浏览器查看各服务商与模型的实时状态，对收藏模型重点监测。
 
 > **设计稿**：[`docs/superpowers/specs/2026-06-03-llm-usability-design.md`](docs/superpowers/specs/2026-06-03-llm-usability-design.md)
+> **数据库迁移**：[`docs/superpowers/db-migrations.md`](docs/superpowers/db-migrations.md)
 >
-> **状态**：MVP — 后端 40 测试通过，前端 5 页面可运行，Docker 化已就绪。
+> **状态**：MVP — 后端 52 测试通过，前端 5 页面可运行，Docker 化 + Alembic 已就绪。
 
 ## 特性
 
@@ -74,11 +75,28 @@ cd frontend && pnpm dev   # http://localhost:5173，/api 自动代理到 :8000
 
 ```bash
 cd backend
-uv run pytest            # 40 tests
+uv run pytest            # 52 tests
 uv run ruff check app    # lint
 uv run ruff format --check app
 uv run mypy app
 ```
+
+## 数据库迁移
+
+Schema 变更通过 [Alembic](https://alembic.sqlalchemy.org/) 管理。详见
+[`docs/superpowers/db-migrations.md`](docs/superpowers/db-migrations.md)。
+
+```bash
+cd backend
+# 改完 app/db/models.py 后：
+uv run alembic revision --autogenerate -m "describe the change"
+uv run alembic upgrade head          # 本地试
+uv run alembic downgrade -1          # 回滚试
+uv run alembic upgrade head          # 再应用
+# 提交 app/db/models.py + alembic/versions/<rev>_*.py
+```
+
+服务启动时 `lifespan` 自动 `alembic upgrade head`，无需手动跑。
 
 ## API 概览
 

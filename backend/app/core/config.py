@@ -6,6 +6,10 @@ from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# backend/ root, derived from this file's location (app/core/config.py → backend/).
+# All data files live under here so paths are stable regardless of CWD.
+_BACKEND_ROOT = Path(__file__).resolve().parent.parent.parent
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
@@ -13,7 +17,7 @@ class Settings(BaseSettings):
     app_host: str = "127.0.0.1"
     app_port: int = 8000
 
-    data_dir: Path = Path("./data")
+    data_dir: Path = _BACKEND_ROOT / "data"
 
     database_url: str = ""  # computed in model_post_init
     sync_database_url: str = ""  # computed
@@ -27,7 +31,7 @@ class Settings(BaseSettings):
     probe_max_tokens: int = 1
     tz: str = "Asia/Shanghai"
 
-    frontend_dist: Path = Path("../frontend/dist")
+    frontend_dist: Path = _BACKEND_ROOT.parent / "frontend" / "dist"
 
     def model_post_init(self, __context):
         self.data_dir.mkdir(parents=True, exist_ok=True)

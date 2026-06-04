@@ -1,12 +1,19 @@
-"""Database init helpers: create_all + seed default settings."""
+"""Database init helpers: run alembic migrations + seed default settings."""
 
 from __future__ import annotations
 
-from sqlalchemy import select
+import asyncio
+import logging
+from pathlib import Path
+
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from app.db.models import Setting
-from app.db.session import Base, get_engine, get_session_maker
+from app.db.session import get_engine, get_session_maker
+
+log = logging.getLogger(__name__)
+
 
 DEFAULT_SETTINGS: dict[str, str] = {
     "default_interval_seconds": "300",
@@ -24,23 +31,51 @@ async def seed_default_settings(session: AsyncSession) -> None:
     await session.commit()
 
 
+def _run_alembic_upgrade() -> None:
+    """Run `alembic upgrade head` from the backend CWD. Sync (Alembic doesn't
+    need async for SQLite DDL). Raises on any migration failure."""
+    from alembic.config import Config
+
+    from alembic import command
+
+    backend_root = Path(__file__).resolve().parent.parent.parent
+    cfg = Config(str(backend_root / "alembic.ini"))
+    cfg.set_main_option("script_location", str(backend_root / "alembic"))
+    command.upgrade(cfg, "head")
+
+
+async def _ensure_wal(engine: AsyncEngine) -> None:
+    """Set SQLite pragmas on the live engine. Migrations also use WAL but
+    we want the async app's connections to honor busy_timeout too."""
+    async with engine.begin() as conn:
+        await conn.execute(text("PRAGMA journal_mode=WAL"))
+        await conn.execute(text("PRAGMA busy_timeout=5000"))
+        await conn.execute(text("PRAGMA synchronous=NORMAL"))
+
+
 async def init_db(
     engine: AsyncEngine | None = None,
     session_maker: async_sessionmaker[AsyncSession] | None = None,
 ) -> None:
+    """Bring the database up to the latest schema and seed default settings.
+
+    On first start this applies all migrations. On subsequent starts it is a
+    no-op if the schema is already current. If migrations fail, the
+    exception is re-raised so the lifespan handler can surface it via
+    uvicorn's startup failure path.
+    """
     engine = engine or get_engine()
     sm = session_maker or get_session_maker()
-    # Set SQLite pragmas on every new connection. WAL allows concurrent
-    # readers + a single writer; busy_timeout makes the writer wait instead
-    # of raising "database is locked" when APScheduler's sync jobstore and
-    # the async app connections race.
-    async with engine.begin() as conn:
-        from sqlalchemy import text
 
-        await conn.execute(text("PRAGMA journal_mode=WAL"))
-        await conn.execute(text("PRAGMA busy_timeout=5000"))
-        await conn.execute(text("PRAGMA synchronous=NORMAL"))
-        await conn.run_sync(Base.metadata.create_all)
+    # Migrations run on a sync engine (Alembic's design) and may take a
+    # while; run them in a worker thread so the event loop stays responsive.
+    try:
+        await asyncio.to_thread(_run_alembic_upgrade)
+    except Exception:
+        log.exception("alembic upgrade head failed")
+        raise
+
+    await _ensure_wal(engine)
     async with sm() as session:
         await seed_default_settings(session)
 
