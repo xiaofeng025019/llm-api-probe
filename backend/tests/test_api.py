@@ -94,6 +94,7 @@ async def test_provider_duplicate_name_409(api_client: httpx.AsyncClient) -> Non
 @pytest.mark.asyncio
 async def test_provider_404(api_client: httpx.AsyncClient) -> None:
     import uuid
+
     r = await api_client.get(f"/api/v1/providers/{uuid.uuid4()}")
     assert r.status_code == 404
 
@@ -312,5 +313,6 @@ async def test_probe_run_triggers(api_client: httpx.AsyncClient) -> None:
     r = await api_client.post(f"/api/v1/probe/run?provider_id={pid}")
     assert r.status_code == 200
     import uuid as _uuid
+
     r = await api_client.post(f"/api/v1/probe/run?provider_id={_uuid.uuid4()}")
     assert r.status_code == 404

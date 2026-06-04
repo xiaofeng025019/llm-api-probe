@@ -6,8 +6,8 @@ import uuid
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
-from sqlalchemy.orm import joinedload
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import joinedload
 
 from app.db.models import Model, ModelType, Provider
 from app.probers.types import DiscoveredModel
@@ -23,7 +23,12 @@ async def list_models(
     if provider is None:
         return []
 
-    query = select(Model).where(Model.provider_id == provider.id).order_by(Model.model_id).options(joinedload(Model.provider))
+    query = (
+        select(Model)
+        .where(Model.provider_id == provider.id)
+        .order_by(Model.model_id)
+        .options(joinedload(Model.provider))
+    )
     if not include_deleted:
         query = query.where(Model.deleted_at.is_(None))
     res = await session.execute(query)

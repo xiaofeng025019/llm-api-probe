@@ -95,9 +95,10 @@ async def test_sync_jobs_adds_and_removes(env) -> None:
 
     # disable provider via DB
     async with env["sm"]() as s:
+        from sqlalchemy import select
+
         from app.db.models import Provider
 
-        from sqlalchemy import select
         result = await s.execute(select(Provider).where(Provider.uuid_id == env["provider_id"]))
         p = result.scalar_one()
         p.enabled = False
@@ -151,9 +152,10 @@ async def test_sync_jobs_uses_faster_interval_for_favorite_models(env) -> None:
 async def test_trigger_now_returns_false_when_disabled(env) -> None:
     # Disabled provider should reject the trigger so the API can surface a 409.
     async with env["sm"]() as s:
+        from sqlalchemy import select
+
         from app.db.models import Provider
 
-        from sqlalchemy import select
         result = await s.execute(select(Provider).where(Provider.uuid_id == env["provider_id"]))
         p = result.scalar_one()
         p.enabled = False

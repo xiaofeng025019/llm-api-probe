@@ -709,6 +709,11 @@ tbody tr:last-child td {
   color: var(--fail);
 }
 
+.model-status-pill.warn {
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+
 .model-status-pill.disabled {
   background: var(--warn-soft);
   color: var(--warn);
@@ -717,6 +722,22 @@ tbody tr:last-child td {
 .model-status-pill.unknown {
   background: var(--unknown-soft);
   color: var(--muted-strong);
+}
+
+.model-status-stack {
+  display: grid;
+  gap: 5px;
+  min-width: 112px;
+}
+
+.model-status-meta {
+  max-width: 150px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.25;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* ---------- forms -------------------------------------------------------- */
@@ -978,6 +999,10 @@ tbody tr:last-child td {
   letter-spacing: -0.01em;
 }
 
+.provider-error-metric {
+  grid-column: 1 / -1;
+}
+
 .provider-card .actions {
   display: flex;
   gap: 6px;
@@ -993,7 +1018,7 @@ tbody tr:last-child td {
 
 .dashboard-provider-card {
   padding: 20px;
-  max-height: 680px;
+  max-height: 760px;
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -1182,9 +1207,119 @@ tbody tr:last-child td {
   border: 1px solid var(--divider);
 }
 
+.metric-subvalue {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.2;
+}
+
+.metric-compact-value {
+  font-size: 14px !important;
+  line-height: 1.35;
+  color: var(--text-secondary);
+  word-break: break-word;
+}
+
 .dashboard-provider-card .dashboard-wide-metric {
   grid-column: 1 / -1;
   min-height: 70px;
+}
+
+.provider-quality-grid {
+  display: grid;
+  grid-template-columns: 1.35fr repeat(2, minmax(180px, 0.75fr));
+  gap: 12px;
+}
+
+.quality-tile {
+  min-width: 0;
+  min-height: 132px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--surface) 96%, white), var(--surface)),
+    var(--surface);
+  box-shadow: var(--shadow-sm);
+}
+
+.quality-wide {
+  grid-row: span 2;
+}
+
+.quality-tile-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.quality-tile-head > span:first-child {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.quality-value {
+  margin-top: 10px;
+  font-size: 24px;
+  font-weight: 700;
+  line-height: 1.2;
+  color: var(--text);
+}
+
+.endpoint-value {
+  margin-top: 14px;
+  font-family: "JetBrains Mono", "SF Mono", monospace;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text);
+  word-break: break-all;
+}
+
+.quality-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  margin-top: 10px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.quality-meta span {
+  min-width: 0;
+}
+
+.error-chip-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 12px;
+}
+
+.error-chip {
+  max-width: 100%;
+  padding: 5px 8px;
+  border-radius: var(--r-sm);
+  background: var(--fail-soft);
+  color: var(--fail);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.25;
+  word-break: break-word;
+}
+
+.error-chip strong {
+  margin-left: 4px;
 }
 
 .dashboard-provider-card .actions {
@@ -1371,9 +1506,9 @@ tbody tr:last-child td {
 
 .favorite-model-stats {
   display: grid;
-  grid-template-columns: repeat(3, minmax(52px, 1fr));
+  grid-template-columns: repeat(4, minmax(52px, 1fr));
   gap: 6px;
-  min-width: 188px;
+  min-width: 240px;
 }
 
 .favorite-model-stats > div {
@@ -1582,6 +1717,13 @@ tbody tr:last-child td {
   .dashboard-provider-body {
     grid-template-columns: 1fr;
   }
+  .provider-quality-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .quality-wide {
+    grid-column: 1 / -1;
+    grid-row: auto;
+  }
   .dashboard-model-panels {
     padding-left: 0;
     padding-top: 14px;
@@ -1640,6 +1782,16 @@ tbody tr:last-child td {
   }
   .dashboard-provider-card .metric .value {
     font-size: 16px;
+  }
+  .provider-quality-grid {
+    grid-template-columns: 1fr;
+  }
+  .quality-tile {
+    min-height: 110px;
+    padding: 14px;
+  }
+  .quality-value {
+    font-size: 21px;
   }
   .favorite-model-item {
     grid-template-columns: minmax(0, 1fr) 30px;

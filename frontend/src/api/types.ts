@@ -7,6 +7,14 @@ export type ModelType =
   | "embedding"
   | "code"
   | "unknown";
+export type ModelHealthStatus =
+  | "online"
+  | "suspect"
+  | "offline"
+  | "rate_limited"
+  | "unauthorized"
+  | "not_found"
+  | "unknown";
 
 export interface Provider {
   id: string;
@@ -31,6 +39,12 @@ export interface ModelOut {
   enabled: boolean;
   is_favorite: boolean;
   last_seen_at: string;
+  status: ModelHealthStatus;
+  status_reason: string | null;
+  status_checked_at: string | null;
+  status_confirmed_at: string | null;
+  last_success_at: string | null;
+  consecutive_failures: number;
 }
 
 export interface DashboardFavoriteModel {
@@ -39,13 +53,21 @@ export interface DashboardFavoriteModel {
   display_name: string | null;
   type: ModelType;
   enabled: boolean;
-  status: "ok" | "fail" | null;
+  status: ModelHealthStatus | null;
+  status_reason: string | null;
+  status_checked_at: string | null;
+  status_confirmed_at: string | null;
+  last_success_at: string | null;
   last_checked_at: string | null;
   latency_ms: number | null;
   ttfb_ms: number | null;
   error_code: string | null;
   error_message: string | null;
   availability_24h: number | null;
+  samples_24h: number;
+  p95_latency_ms_24h: number | null;
+  p95_ttfb_ms_24h: number | null;
+  consecutive_failures: number;
 }
 
 export interface DashboardProvider {
@@ -58,6 +80,15 @@ export interface DashboardProvider {
   last_status: "ok" | "degraded" | "fail" | null;
   availability_24h: number | null;
   avg_latency_ms_24h: number | null;
+  p95_latency_ms_24h: number | null;
+  p95_ttfb_ms_24h: number | null;
+  samples_24h: number;
+  failures_24h: number;
+  error_counts_24h: Record<string, number>;
+  list_models_status: "ok" | "fail" | null;
+  list_models_latency_ms: number | null;
+  list_models_checked_at: string | null;
+  list_models_error_code: string | null;
   available_models_online: number;
   favorite_models_online: number;
   favorite_models_total: number;

@@ -86,6 +86,12 @@ class ModelOut(BaseModel):
     enabled: bool
     is_favorite: bool
     last_seen_at: datetime
+    status: str = "unknown"
+    status_reason: str | None = None
+    status_checked_at: datetime | None = None
+    status_confirmed_at: datetime | None = None
+    last_success_at: datetime | None = None
+    consecutive_failures: int = 0
 
 
 class ModelPatch(BaseModel):
@@ -118,12 +124,20 @@ class DashboardFavoriteModel(BaseModel):
     type: ModelType
     enabled: bool
     status: str | None
+    status_reason: str | None = None
+    status_checked_at: datetime | None = None
+    status_confirmed_at: datetime | None = None
+    last_success_at: datetime | None = None
     last_checked_at: datetime | None
     latency_ms: int | None
     ttfb_ms: int | None
     error_code: ErrorCode | None
     error_message: str | None
     availability_24h: float | None
+    samples_24h: int = 0
+    p95_latency_ms_24h: int | None = None
+    p95_ttfb_ms_24h: int | None = None
+    consecutive_failures: int = 0
 
 
 class DashboardProvider(BaseModel):
@@ -136,6 +150,15 @@ class DashboardProvider(BaseModel):
     last_status: str | None
     availability_24h: float | None
     avg_latency_ms_24h: int | None
+    p95_latency_ms_24h: int | None = None
+    p95_ttfb_ms_24h: int | None = None
+    samples_24h: int = 0
+    failures_24h: int = 0
+    error_counts_24h: dict[str, int] = Field(default_factory=dict)
+    list_models_status: str | None = None
+    list_models_latency_ms: int | None = None
+    list_models_checked_at: datetime | None = None
+    list_models_error_code: ErrorCode | None = None
     available_models_online: int
     favorite_models_online: int
     favorite_models_total: int

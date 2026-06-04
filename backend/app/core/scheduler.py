@@ -112,10 +112,10 @@ async def _run_probe(
                 return
 
             # Look up model by UUID if provided
-            model = None
+            model: Model | None = None
             if model_uuid:
-                result = await session.execute(select(Model).where(Model.uuid_id == model_uuid))
-                model = result.scalar_one_or_none()
+                model_result = await session.execute(select(Model).where(Model.uuid_id == model_uuid))
+                model = model_result.scalar_one_or_none()
 
             if target == ProbeTarget.chat_completion:
                 if model is None or not model.enabled:

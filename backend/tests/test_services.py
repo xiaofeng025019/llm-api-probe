@@ -190,6 +190,109 @@ async def test_record_outcome_persists(session) -> None:
 
 
 @pytest.mark.asyncio
+async def test_record_outcome_updates_confirmed_model_status(session) -> None:
+    p = await providers_svc.create_provider(
+        session,
+        ProviderCreate(
+            name="p1",
+            kind=ProviderKind.openai,
+            base_url="https://api.openai.com",
+            api_key="k",
+        ),
+    )
+    fav = (
+        await models_svc.upsert_discovered(
+            session, p.uuid_id, [DiscoveredModel(model_id="gpt-4o", type=ModelType.chat)]
+        )
+    )[0]
+    fav.is_favorite = True
+    await session.commit()
+
+    await results_svc.record_outcome(
+        session,
+        p,
+        fav.id,
+        ProbeTarget.chat_completion,
+        ProbeOutcome(success=False, http_status=500, latency_ms=100, error_code=ErrorCode.server),
+    )
+    model = await models_svc.get_model(session, fav.uuid_id)
+    assert model is not None
+    assert model.status == "suspect"
+    assert model.consecutive_failures == 1
+    assert model.status_checked_at is not None
+    assert model.status_confirmed_at is not None
+    assert model.last_success_at is None
+
+    await results_svc.record_outcome(
+        session,
+        p,
+        fav.id,
+        ProbeTarget.chat_completion,
+        ProbeOutcome(success=False, http_status=500, latency_ms=100, error_code=ErrorCode.server),
+    )
+    model = await models_svc.get_model(session, fav.uuid_id)
+    assert model is not None
+    assert model.status == "offline"
+    assert model.status_reason == "server"
+    assert model.consecutive_failures == 2
+
+    await results_svc.record_outcome(
+        session,
+        p,
+        fav.id,
+        ProbeTarget.chat_completion,
+        ProbeOutcome(success=True, http_status=200, latency_ms=80),
+    )
+    model = await models_svc.get_model(session, fav.uuid_id)
+    assert model is not None
+    assert model.status == "online"
+    assert model.status_reason is None
+    assert model.consecutive_failures == 0
+    assert model.last_success_at is not None
+
+
+@pytest.mark.asyncio
+async def test_record_outcome_uses_precise_failure_status(session) -> None:
+    p = await providers_svc.create_provider(
+        session,
+        ProviderCreate(
+            name="p1",
+            kind=ProviderKind.openai,
+            base_url="https://api.openai.com",
+            api_key="k",
+        ),
+    )
+    model = (
+        await models_svc.upsert_discovered(
+            session, p.uuid_id, [DiscoveredModel(model_id="gpt-4o", type=ModelType.chat)]
+        )
+    )[0]
+
+    await results_svc.record_outcome(
+        session,
+        p,
+        model.id,
+        ProbeTarget.chat_completion,
+        ProbeOutcome(success=False, http_status=429, latency_ms=100, error_code=ErrorCode.rate_limit),
+    )
+    refreshed = await models_svc.get_model(session, model.uuid_id)
+    assert refreshed is not None
+    assert refreshed.status == "rate_limited"
+    assert refreshed.status_reason == "rate_limit"
+
+    await results_svc.record_outcome(
+        session,
+        p,
+        model.id,
+        ProbeTarget.chat_completion,
+        ProbeOutcome(success=False, http_status=404, latency_ms=100, error_code=ErrorCode.other),
+    )
+    refreshed = await models_svc.get_model(session, model.uuid_id)
+    assert refreshed is not None
+    assert refreshed.status == "not_found"
+
+
+@pytest.mark.asyncio
 async def test_cleanup_old_removes_old_rows(session) -> None:
     p = await providers_svc.create_provider(
         session,
@@ -207,7 +310,7 @@ async def test_cleanup_old_removes_old_rows(session) -> None:
     await session.commit()
     removed = await results_svc.cleanup_old(session, retention_days=30)
     assert removed == 1
-    assert (await results_svc.list_results(session, provider_id=p.uuid_id, limit=10)) == []  # only old row existed
+    assert (await results_svc.list_results(session, provider_id=p.uuid_id, limit=10)) == []
 
 
 @pytest.mark.asyncio
@@ -361,16 +464,26 @@ async def test_dashboard_includes_favorite_model_status_details(session) -> None
             model_id_at_probe=other.model_id,
         )
     )
+    fav.status = "online"
+    fav.status_checked_at = base_now + timedelta(seconds=1)
+    fav.status_confirmed_at = base_now + timedelta(seconds=1)
+    fav.last_success_at = base_now + timedelta(seconds=1)
+    fav.consecutive_failures = 0
     await session.commit()
 
     dash = await results_svc.dashboard(session)
     favorite_models = dash.providers[0].favorite_models
     assert len(favorite_models) == 1
     assert favorite_models[0].model_id == "gpt-4o"
-    assert favorite_models[0].status == "ok"
+    assert favorite_models[0].status == "online"
+    assert favorite_models[0].last_success_at == fav.last_success_at
     assert favorite_models[0].latency_ms == 120
     assert favorite_models[0].ttfb_ms == 40
     assert favorite_models[0].availability_24h == 50
+    assert favorite_models[0].samples_24h == 2
+    assert favorite_models[0].p95_latency_ms_24h == 220
+    assert favorite_models[0].p95_ttfb_ms_24h == 70
+    assert favorite_models[0].consecutive_failures == 0
 
 
 @pytest.mark.asyncio
@@ -398,6 +511,11 @@ async def test_dashboard_provider_health_uses_provider_and_model_signals(session
 
     dash = await results_svc.dashboard(session)
     assert dash.providers[0].last_status == "degraded"
+    assert dash.providers[0].samples_24h == 3
+    assert dash.providers[0].failures_24h == 1
+    assert dash.providers[0].p95_latency_ms_24h == 10
+    assert dash.providers[0].list_models_status == "ok"
+    assert dash.providers[0].list_models_latency_ms == 10
     assert dash.totals["degraded"] == 1
     assert dash.totals["ok"] == 0
     assert dash.totals["failing"] == 0
@@ -416,11 +534,17 @@ async def test_dashboard_provider_health_fails_when_list_models_fails(session) -
         session, p, m.id, ProbeTarget.chat_completion, ProbeOutcome(success=True, latency_ms=10)
     )
     await results_svc.record_outcome(
-        session, p, None, ProbeTarget.list_models, ProbeOutcome(success=False, latency_ms=10)
+        session,
+        p,
+        None,
+        ProbeTarget.list_models,
+        ProbeOutcome(success=False, latency_ms=10, error_code=ErrorCode.other),
     )
 
     dash = await results_svc.dashboard(session)
     assert dash.providers[0].last_status == "fail"
+    assert dash.providers[0].list_models_status == "fail"
+    assert dash.providers[0].error_counts_24h == {"other": 1}
     assert dash.totals["failing"] == 1
 
 
@@ -472,7 +596,7 @@ async def test_dashboard_favorites_delta_24h_ago(session) -> None:
             latency_ms=10,
             checked_at=base_old,
             provider_name_at_probe=p.name,
-            model_id_at_probe=ms[0].model_id,
+            model_id_at_probe=ms[1].model_id,
         )
     )
     session.add(
@@ -496,7 +620,7 @@ async def test_dashboard_favorites_delta_24h_ago(session) -> None:
             latency_ms=10,
             checked_at=base_now + timedelta(seconds=1),
             provider_name_at_probe=p.name,
-            model_id_at_probe=ms[0].model_id,
+            model_id_at_probe=ms[1].model_id,
         )
     )
     await session.commit()

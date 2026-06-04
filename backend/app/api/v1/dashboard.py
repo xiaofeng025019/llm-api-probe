@@ -76,12 +76,16 @@ async def import_(
     favorites_restored = 0
     # Check both active and soft-deleted providers
     existing_active = {p.name: p for p in await providers_svc.list_providers(session)}
-    existing_deleted = {p.name: p for p in await providers_svc.list_providers(session, include_deleted=True) if p.deleted_at is not None}
-    
+    existing_deleted = {
+        p.name: p
+        for p in await providers_svc.list_providers(session, include_deleted=True)
+        if p.deleted_at is not None
+    }
+
     for spec in body.providers:
         existing_p = existing_active.get(spec.name)
         deleted_p = existing_deleted.get(spec.name)
-        
+
         if existing_p is not None:
             # Update existing active provider
             patch_data: dict[str, Any] = {

@@ -95,14 +95,22 @@ class Model(Base):
     enabled: Mapped[bool] = mapped_column(default=True)
     is_favorite: Mapped[bool] = mapped_column(default=False)
     last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    status: Mapped[str] = mapped_column(String(40), default="unknown")
+    status_reason: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    status_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    status_confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_success_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    consecutive_failures: Mapped[int] = mapped_column(Integer, default=0)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, default=None)
 
     provider: Mapped[Provider] = relationship(back_populates="models", lazy="joined")
-    
+
     @property
     def provider_uuid(self) -> uuid.UUID:
         """Return the provider's uuid_id for API responses."""
-        return self.provider.uuid_id if self.provider else None
+        assert self.provider is not None
+        return self.provider.uuid_id
+
     results: Mapped[list[ProbeResult]] = relationship(back_populates="model", cascade="all, delete-orphan")
 
 
@@ -141,7 +149,8 @@ class ProbeResult(Base):
     @property
     def provider_uuid(self) -> uuid.UUID:
         """Return the provider's uuid_id for API responses."""
-        return self.provider_rel.uuid_id if self.provider_rel else None
+        assert self.provider_rel is not None
+        return self.provider_rel.uuid_id
 
     @property
     def model_uuid(self) -> uuid.UUID | None:

@@ -4,8 +4,12 @@ import { api, ModelOut, ProbeResult, Provider, Setting } from "../api/types";
 import { withErrorToast } from "../lib/action";
 import {
   formatMs,
+  formatPercent,
+  parseApiDate,
   formatRelative,
   formatTime,
+  modelHealthClass,
+  modelHealthLabel,
   modelTypeColor,
   statusColor,
 } from "../lib/format";
@@ -19,11 +23,15 @@ import {
   IconClock,
   IconActivity,
   IconChart,
+  IconGauge,
+  IconHash,
   IconRefresh,
   IconPlay,
   IconProbe,
   IconStarOutline,
   IconModels,
+  IconGlobe,
+  IconNetwork,
 } from "../components/Icons";
 
 const WINDOWS: Array<{ label: string; hours: number }> = [
@@ -32,6 +40,34 @@ const WINDOWS: Array<{ label: string; hours: number }> = [
   { label: "7d", hours: 24 * 7 },
   { label: "30d", hours: 24 * 30 },
 ];
+
+function p95(values: Array<number | null | undefined>): number | null {
+  const nums = values
+    .filter((v): v is number => v != null && Number.isFinite(v))
+    .sort((a, b) => a - b);
+  if (nums.length === 0) return null;
+  const index = Math.max(0, Math.min(nums.length - 1, Math.ceil(nums.length * 0.95) - 1));
+  return nums[index];
+}
+
+function consecutiveFailures(rowsDesc: ProbeResult[]): number {
+  let count = 0;
+  for (const row of rowsDesc) {
+    if (row.success) break;
+    count += 1;
+  }
+  return count;
+}
+
+function errorCounts(rows: ProbeResult[]): Array<[string, number]> {
+  const counts = new Map<string, number>();
+  for (const row of rows) {
+    if (row.success) continue;
+    const key = row.error_code ?? (row.http_status ? `HTTP ${row.http_status}` : "unknown");
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  return [...counts.entries()].sort((a, b) => b[1] - a[1]);
+}
 
 export function ProviderDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -86,6 +122,36 @@ export function ProviderDetailPage() {
     return byModel;
   }, [modelStatusResults]);
 
+  const modelQualityById = useMemo(() => {
+    const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+    const grouped = new Map<string, ProbeResult[]>();
+    for (const r of modelStatusResults) {
+      if (r.model_id == null || r.target !== "chat_completion") continue;
+      const rows = grouped.get(r.model_id) ?? [];
+      rows.push(r);
+      grouped.set(r.model_id, rows);
+    }
+    return new Map(
+      [...grouped.entries()].map(([modelId, rows]) => {
+        const sorted = [...rows].sort(
+          (a, b) => parseApiDate(b.checked_at).getTime() - parseApiDate(a.checked_at).getTime(),
+        );
+        const recent = sorted.filter((r) => parseApiDate(r.checked_at).getTime() >= cutoff);
+        const successes = recent.filter((r) => r.success).length;
+        return [
+          modelId,
+          {
+            samples24h: recent.length,
+            availability24h: recent.length > 0 ? (successes / recent.length) * 100 : null,
+            p95Latency: p95(recent.map((r) => r.latency_ms)),
+            p95Ttfb: p95(recent.map((r) => r.ttfb_ms)),
+            consecutiveFailures: consecutiveFailures(sorted),
+          },
+        ];
+      }),
+    );
+  }, [modelStatusResults]);
+
   // keyboard: arrow keys on window tabs
   function onWindowKey(e: React.KeyboardEvent, idx: number) {
     if (e.key === "ArrowRight" || e.key === "ArrowDown") {
@@ -114,17 +180,33 @@ export function ProviderDetailPage() {
     );
   }
 
-  const lastResult = results[0];
-  const successes = results.filter((r) => r.success).length;
+  const qualityResults = results.filter((r) => r.target === "chat_completion");
+  const sortedModelListResults = modelStatusResults
+    .filter((r) => r.target === "list_models")
+    .sort((a, b) => parseApiDate(b.checked_at).getTime() - parseApiDate(a.checked_at).getTime());
+  const latestModelListResult = sortedModelListResults[0];
+  const listModelsStatus = latestModelListResult
+    ? latestModelListResult.success
+      ? "ok"
+      : "fail"
+    : null;
+  const lastResult = qualityResults[0] ?? results[0];
+  const successes = qualityResults.filter((r) => r.success).length;
   const availability =
-    results.length > 0 ? (successes / results.length) * 100 : null;
+    qualityResults.length > 0 ? (successes / qualityResults.length) * 100 : null;
   const avgLatency =
-    results.length > 0
-      ? results
+    qualityResults.length > 0
+      ? qualityResults
           .filter((r) => r.success && r.latency_ms != null)
           .reduce((a, r) => a + (r.latency_ms ?? 0), 0) /
-        Math.max(1, results.filter((r) => r.success).length)
+        Math.max(1, qualityResults.filter((r) => r.success).length)
       : null;
+  const failures = qualityResults.length - successes;
+  const p95Latency = p95(qualityResults.map((r) => r.latency_ms));
+  const p95Ttfb = p95(qualityResults.map((r) => r.ttfb_ms));
+  const enabledModels = models.filter((m) => m.enabled).length;
+  const availableModels = models.filter((m) => m.enabled && latestResultByModel.get(m.id)?.success).length;
+  const selectedWindowErrors = errorCounts(qualityResults);
   const statusIntervalLabel = modelStatusIntervalLabel(settings);
 
   return (
@@ -242,6 +324,129 @@ export function ProviderDetailPage() {
           value={formatMs(avgLatency)}
           icon={<IconClock />}
         />
+        <Stat
+          label={`${window_.label} P95 延迟`}
+          value={formatMs(p95Latency)}
+          icon={<IconGauge />}
+        />
+        <Stat
+          label={`${window_.label} P95 TTFB`}
+          value={formatMs(p95Ttfb)}
+          icon={<IconActivity />}
+        />
+        <Stat
+          label={`${window_.label} 样本`}
+          value={`${qualityResults.length} / ${failures}`}
+          hint="总数 / 失败"
+          icon={<IconHash />}
+        />
+      </div>
+
+      <div className="section fade-up">
+        <div className="section-header">
+          <div className="section-title">
+            <IconGauge />
+            Provider Quality
+          </div>
+          <span className="muted">{window_.label} window</span>
+        </div>
+        <div className="provider-quality-grid">
+          <div className="quality-tile quality-wide">
+            <div className="quality-tile-head">
+              <span>
+                <IconGlobe />
+                Endpoint
+              </span>
+              <span className={`pill ${provider.enabled ? "ok" : "warn"}`}>
+                {provider.enabled ? "monitoring" : "paused"}
+              </span>
+            </div>
+            <div className="endpoint-value" title={provider.base_url}>
+              {provider.base_url}
+            </div>
+            <div className="quality-meta">
+              <span>Timeout {provider.timeout_seconds}s</span>
+              <span>Probe {statusIntervalLabel}</span>
+              <span>Model list {provider.interval_seconds}s</span>
+              {provider.proxy && <span>Proxy configured</span>}
+            </div>
+          </div>
+
+          <div className="quality-tile">
+            <div className="quality-tile-head">
+              <span>
+                <IconRefresh />
+                Model List
+              </span>
+              <span className={`status-dot ${listModelsStatus ?? "unknown"}`} />
+            </div>
+            <div className="quality-value">
+              {latestModelListResult ? (latestModelListResult.success ? "OK" : "Failed") : "—"}
+            </div>
+            <div className="quality-meta">
+              <span>{formatMs(latestModelListResult?.latency_ms)}</span>
+              <span title={formatTime(latestModelListResult?.checked_at)}>
+                {formatRelative(latestModelListResult?.checked_at)}
+              </span>
+              {latestModelListResult?.error_code && <span>{latestModelListResult.error_code}</span>}
+            </div>
+          </div>
+
+          <div className="quality-tile">
+            <div className="quality-tile-head">
+              <span>
+                <IconModels />
+                Model Coverage
+              </span>
+            </div>
+            <div className="quality-value">
+              {availableModels} / {enabledModels}
+            </div>
+            <div className="quality-meta">
+              <span>Available Models</span>
+              <span>Total {models.length}</span>
+            </div>
+          </div>
+
+          <div className="quality-tile">
+            <div className="quality-tile-head">
+              <span>
+                <IconNetwork />
+                Communication
+              </span>
+            </div>
+            <div className="quality-value">{formatMs(p95Latency)}</div>
+            <div className="quality-meta">
+              <span>P95 latency</span>
+              <span>P95 TTFB {formatMs(p95Ttfb)}</span>
+              <span>Avg {formatMs(avgLatency)}</span>
+            </div>
+          </div>
+
+          <div className="quality-tile">
+            <div className="quality-tile-head">
+              <span>
+                <IconAlert />
+                Errors
+              </span>
+              <span className={`pill ${failures > 0 ? "fail" : "ok"}`}>{failures}</span>
+            </div>
+            {selectedWindowErrors.length > 0 ? (
+              <div className="error-chip-list" aria-label={`${window_.label} error distribution`}>
+                {selectedWindowErrors.slice(0, 4).map(([code, count]) => (
+                  <span className="error-chip" key={code}>
+                    {code} <strong>{count}</strong>
+                  </span>
+                ))}
+              </div>
+            ) : (
+              <div className="quality-value">No errors</div>
+            )}
+            <div className="quality-meta">
+              <span>{qualityResults.length} model probes</span>
+            </div>
+          </div>
+        </div>
       </div>
 
       <div className="card section fade-up">
@@ -296,9 +501,15 @@ export function ProviderDetailPage() {
                 <th scope="col">Status</th>
                 <th scope="col">Type</th>
                 <th scope="col">Enabled</th>
-                <th scope="col">Last probe</th>
+                <th scope="col">Status checked</th>
+                <th scope="col">24h</th>
+                <th scope="col">Samples</th>
                 <th scope="col">Latency</th>
                 <th scope="col">TTFB</th>
+                <th scope="col">P95 Lat</th>
+                <th scope="col">P95 TTFB</th>
+                <th scope="col">Failures</th>
+                <th scope="col">Last success</th>
                 <th scope="col">Last seen</th>
                 <th style={{ width: 100 }} scope="col">
                   <span className="sr-only">Actions</span>
@@ -308,7 +519,9 @@ export function ProviderDetailPage() {
             <tbody>
               {models.map((m) => {
                 const latest = latestResultByModel.get(m.id);
-                const status = !m.enabled ? "disabled" : latest?.success ? "ok" : latest ? "fail" : "unknown";
+                const quality = modelQualityById.get(m.id);
+                const statusClass = modelHealthClass(m.status, m.enabled);
+                const statusLabel = modelHealthLabel(m.status, m.enabled);
                 return (
                   <tr key={m.id}>
                     <td>
@@ -332,10 +545,15 @@ export function ProviderDetailPage() {
                       </div>
                     </td>
                     <td>
-                      <span className={`model-status-pill ${status}`}>
-                        <span className={`status-dot ${status === "disabled" ? "warn" : status}`} />
-                        {status}
-                      </span>
+                      <div className="model-status-stack">
+                        <span className={`model-status-pill ${statusClass}`}>
+                          <span className={`status-dot ${statusClass}`} />
+                          {statusLabel}
+                        </span>
+                        <span className="model-status-meta">
+                          {m.status_reason ?? (m.status_confirmed_at ? "confirmed" : "unconfirmed")}
+                        </span>
+                      </div>
                     </td>
                     <td>
                       <span
@@ -371,16 +589,34 @@ export function ProviderDetailPage() {
                       </label>
                     </td>
                     <td className="muted">
-                      {latest ? (
-                        <span title={formatTime(latest.checked_at)}>
-                          {formatRelative(latest.checked_at)}
+                      {m.status_checked_at ? (
+                        <span title={formatTime(m.status_checked_at)}>
+                          {formatRelative(m.status_checked_at)}
                         </span>
                       ) : (
                         "—"
                       )}
                     </td>
+                    <td className="mono">{formatPercent(quality?.availability24h)}</td>
+                    <td className="mono">{quality?.samples24h ?? 0}</td>
                     <td className="mono">{formatMs(latest?.latency_ms ?? null)}</td>
                     <td className="mono">{formatMs(latest?.ttfb_ms ?? null)}</td>
+                    <td className="mono">{formatMs(quality?.p95Latency)}</td>
+                    <td className="mono">{formatMs(quality?.p95Ttfb)}</td>
+                    <td>
+                      <span className={`pill ${m.consecutive_failures ? "warn" : "ok"}`}>
+                        {m.consecutive_failures}
+                      </span>
+                    </td>
+                    <td className="muted">
+                      {m.last_success_at ? (
+                        <span title={formatTime(m.last_success_at)}>
+                          {formatRelative(m.last_success_at)}
+                        </span>
+                      ) : (
+                        "—"
+                      )}
+                    </td>
                     <td className="muted">
                       <span title={formatTime(m.last_seen_at)}>
                         {formatRelative(m.last_seen_at)}
@@ -404,7 +640,7 @@ export function ProviderDetailPage() {
               })}
               {models.length === 0 && (
                 <tr>
-                  <td colSpan={10}>
+                  <td colSpan={16}>
                     <div className="empty-state">
                       <p>没有模型。点 “更新模型清单” 拉取。</p>
                     </div>
