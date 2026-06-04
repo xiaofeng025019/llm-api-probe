@@ -3,6 +3,7 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import { api, Provider, ProviderKind } from "../api/types";
 import { useDashboard } from "../hooks/useDashboard";
 import { formatRelative, statusColor } from "../lib/format";
+import { modelStatusIntervalLabel } from "../lib/settings";
 import { Icon } from "../components/Icons";
 import { withErrorToast } from "../lib/action";
 import { pushToast } from "../components/Toast";
@@ -12,9 +13,12 @@ type FavoriteFilter = "all" | "favorites";
 
 export function ProvidersPage() {
   const nav = useNavigate();
-  const { providers, dashboard, modelsByProvider, refresh } = useDashboard();
+  const { providers, dashboard, modelsByProvider, settings, refresh } = useDashboard();
   const [showAdd, setShowAdd] = useState(false);
   const [editing, setEditing] = useState<Provider | null>(null);
+  const [runningProviders, setRunningProviders] = useState<Record<number, boolean>>({});
+  const [syncingProviders, setSyncingProviders] = useState<Record<number, boolean>>({});
+  const [togglingProviders, setTogglingProviders] = useState<Record<number, boolean>>({});
   const [params, setParams] = useSearchParams();
 
   // URL-driven filter state: ?status=ok|fail&favorites=1
@@ -53,6 +57,24 @@ export function ProvidersPage() {
     });
   }
 
+  async function toggleMonitoring(p: Provider) {
+    const nextEnabled = !p.enabled;
+    setTogglingProviders((prev) => ({ ...prev, [p.id]: true }));
+    try {
+      await withErrorToast(api.patchProvider(p.id, { enabled: nextEnabled }), "切换监测");
+      pushToast("ok", nextEnabled ? "已开启监测" : "已暂停监测", p.name);
+      await refresh();
+    } catch {
+      /* toast already shown */
+    } finally {
+      setTogglingProviders((prev) => {
+        const next = { ...prev };
+        delete next[p.id];
+        return next;
+      });
+    }
+  }
+
   const lastStatusById = useMemo(
     () => Object.fromEntries(
       (dashboard?.providers ?? []).map((p) => [p.provider_id, p.last_status]),
@@ -68,7 +90,7 @@ export function ProvidersPage() {
       if (statusFilter !== "all") {
         const st = lastStatusById[p.id];
         if (statusFilter === "ok" && st !== "ok") return false;
-        if (statusFilter === "fail" && st !== "fail") return false;
+        if (statusFilter === "fail" && st !== "fail" && st !== "degraded") return false;
       }
       if (favFilter === "favorites") {
         const ms = modelsByProvider[p.id] ?? [];
@@ -80,6 +102,7 @@ export function ProvidersPage() {
 
   const totalUnfiltered = providers.length;
   const hasFilter = statusFilter !== "all" || favFilter !== "all";
+  const statusIntervalLabel = modelStatusIntervalLabel(settings);
 
   return (
     <div>
@@ -198,6 +221,9 @@ export function ProvidersPage() {
             const dash = dashboard?.providers.find((d) => d.provider_id === p.id);
             const models = modelsByProvider[p.id] ?? [];
             const status = lastStatusById[p.id];
+            const isRunning = !!runningProviders[p.id];
+            const isSyncing = !!syncingProviders[p.id];
+            const isToggling = !!togglingProviders[p.id];
             return (
               <article
                 key={p.id}
@@ -223,12 +249,40 @@ export function ProvidersPage() {
                         aria-label={`Status: ${status ?? "unknown"}`}
                       />
                       {p.name}
+                      <span className={`pill ${status ?? "unknown"}`}>
+                        {status ?? "unknown"}
+                      </span>
                     </div>
                     <div className="meta">
                       <span className="kind-badge">{p.kind}</span>
                       <span style={{ marginLeft: 8 }}>
-                        {models.length} models · {p.interval_seconds}s 间隔
+                        {models.length} models · 清单 {p.interval_seconds}s
                       </span>
+                    </div>
+                    <div className="dashboard-monitoring-line">
+                      <label
+                        className={`monitoring-switch ${isToggling ? "busy" : ""}`}
+                        onClick={(e) => e.stopPropagation()}
+                        onKeyDown={(e) => e.stopPropagation()}
+                        title={p.enabled ? "暂停自动监测" : "开启自动监测"}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={p.enabled}
+                          disabled={isToggling}
+                          onChange={() => void toggleMonitoring(p)}
+                          aria-label={`${p.enabled ? "暂停" : "开启"} ${p.name} 自动监测`}
+                        />
+                        <span className="monitoring-switch-track" />
+                        <span className="monitoring-switch-text">
+                          {isToggling
+                            ? "Updating..."
+                            : `Monitoring ${p.enabled ? "on" : "off"}`}
+                        </span>
+                      </label>
+                      <span className="muted">状态检测：{statusIntervalLabel}</span>
+                      {isRunning && <span className="pill info">状态检测已排队</span>}
+                      {isSyncing && <span className="pill info">模型清单更新中</span>}
                     </div>
                   </div>
                 </div>
@@ -275,23 +329,57 @@ export function ProvidersPage() {
                   </button>
                   <button
                     className="secondary sm"
-                    onClick={() =>
-                      withErrorToast(api.runNow(p.id), "Run").then(refresh)
-                    }
-                    aria-label={`立即探测 ${p.name}`}
+                    disabled={isRunning || !p.enabled}
+                    title={p.enabled ? "检测当前模型可用性、延迟和错误状态" : "开启监测后可检测状态"}
+                    onClick={async () => {
+                      setRunningProviders((prev) => ({ ...prev, [p.id]: true }));
+                      try {
+                        await withErrorToast(api.runNow(p.id), "检测状态");
+                        pushToast("info", "状态检测已排队", p.name);
+                        window.setTimeout(() => {
+                          void refresh().finally(() => {
+                            setRunningProviders((prev) => {
+                              const next = { ...prev };
+                              delete next[p.id];
+                              return next;
+                            });
+                          });
+                        }, 8_000);
+                      } catch {
+                        setRunningProviders((prev) => {
+                          const next = { ...prev };
+                          delete next[p.id];
+                          return next;
+                        });
+                      }
+                    }}
+                    aria-label={`检测 ${p.name} 状态`}
                   >
-                    <Icon.Run />
-                    Run
+                    {isRunning ? <span className="spinner" /> : <Icon.Run />}
+                    {isRunning ? "检测中..." : "检测状态"}
                   </button>
                   <button
                     className="secondary sm"
-                    onClick={() =>
-                      withErrorToast(api.syncModels(p.id), "Sync").then(refresh)
-                    }
-                    aria-label={`同步模型 ${p.name}`}
+                    disabled={isSyncing}
+                    title="从 provider 重新拉取可提供的模型列表"
+                    onClick={async () => {
+                      setSyncingProviders((prev) => ({ ...prev, [p.id]: true }));
+                      try {
+                        await withErrorToast(api.syncModels(p.id), "更新模型清单");
+                        pushToast("ok", "模型清单已更新", p.name);
+                        await refresh();
+                      } finally {
+                        setSyncingProviders((prev) => {
+                          const next = { ...prev };
+                          delete next[p.id];
+                          return next;
+                        });
+                      }
+                    }}
+                    aria-label={`更新 ${p.name} 模型清单`}
                   >
-                    <Icon.Sync />
-                    Sync
+                    {isSyncing ? <span className="spinner" /> : <Icon.Sync />}
+                    {isSyncing ? "更新中..." : "更新模型清单"}
                   </button>
                   <button
                     className="ghost sm"
@@ -329,7 +417,7 @@ export function ProvidersPage() {
   );
 }
 
-function ProviderDialog({
+export function ProviderDialog({
   provider,
   onClose,
   onSaved,
@@ -473,7 +561,7 @@ function ProviderDialog({
             />
           </div>
           <div className="form-row">
-            <label>Interval (秒)</label>
+            <label>Model list interval (秒)</label>
             <input
               type="number"
               value={intervalSec}
@@ -501,14 +589,18 @@ function ProviderDialog({
               placeholder='{"X-Org": "acme"}'
             />
           </div>
-          <div className="form-row full checkbox">
-            <label>
+          <div className="form-row full">
+            <label>Monitoring</label>
+            <label className="monitoring-switch provider-dialog-switch">
               <input
                 type="checkbox"
                 checked={enabled}
                 onChange={(e) => setEnabled(e.target.checked)}
               />
-              启用检测
+              <span className="monitoring-switch-track" />
+              <span className="monitoring-switch-text">
+                {enabled ? "开启自动监测" : "暂停自动监测"}
+              </span>
             </label>
           </div>
         </div>

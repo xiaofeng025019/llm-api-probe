@@ -41,7 +41,6 @@ function App() {
               Dashboard
             </NavLink>
             <NavLink to="/providers">Providers</NavLink>
-            <NavLink to="/models">Favorites</NavLink>
             <NavLink to="/settings">Settings</NavLink>
           </nav>
           <div className="spacer" />

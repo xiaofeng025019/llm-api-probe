@@ -18,6 +18,7 @@ from app.probers.types import DiscoveredModel
 from app.schemas.api import ProviderCreate
 from app.services import models as models_svc
 from app.services import providers as providers_svc
+from app.services import settings as settings_svc
 
 
 @pytest.fixture
@@ -101,6 +102,47 @@ async def test_sync_jobs_adds_and_removes(env) -> None:
         await s.commit()
     await sync_jobs_for_provider(env["provider_id"], session_maker=env["sm"])
     assert sched.get_jobs() == []
+
+
+@pytest.mark.asyncio
+async def test_sync_jobs_uses_faster_interval_for_favorite_models(env) -> None:
+    from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
+
+    from app.core import scheduler as sched_mod
+
+    sched_mod._scheduler = None
+    sched = sched_mod.get_scheduler()
+    sched._jobstores["default"] = SQLAlchemyJobStore(url="sqlite:///:memory:")
+
+    async with env["sm"]() as s:
+        await settings_svc.upsert_settings(
+            s,
+            {
+                settings_svc.FAVORITE_MODEL_INTERVAL_KEY: "120",
+                settings_svc.REGULAR_MODEL_INTERVAL_KEY: "900",
+            },
+        )
+        models = await models_svc.upsert_discovered(
+            s,
+            env["provider_id"],
+            [
+                DiscoveredModel(model_id="gpt-favorite"),
+                DiscoveredModel(model_id="gpt-regular"),
+            ],
+        )
+        models[0].is_favorite = True
+        await s.commit()
+        favorite_id = models[0].id
+        regular_id = models[1].id
+
+    await sync_jobs_for_provider(env["provider_id"], session_maker=env["sm"])
+
+    favorite_job = sched.get_job(f"p{env['provider_id']}:chat_completion:m{favorite_id}")
+    regular_job = sched.get_job(f"p{env['provider_id']}:chat_completion:m{regular_id}")
+    assert favorite_job is not None
+    assert regular_job is not None
+    assert favorite_job.trigger.interval.total_seconds() == 120
+    assert regular_job.trigger.interval.total_seconds() == 900
 
 
 @pytest.mark.asyncio

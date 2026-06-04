@@ -296,6 +296,7 @@ async def test_dashboard_available_models_counts_recent_per_model(session) -> No
     dash = await results_svc.dashboard(session)
     assert dash.totals["models"] == 3
     assert dash.totals["available_models"] == 1
+    assert dash.providers[0].available_models_online == 1
 
 
 @pytest.mark.asyncio
@@ -362,6 +363,57 @@ async def test_dashboard_includes_favorite_model_status_details(session) -> None
     assert favorite_models[0].latency_ms == 120
     assert favorite_models[0].ttfb_ms == 40
     assert favorite_models[0].availability_24h == 50
+
+
+@pytest.mark.asyncio
+async def test_dashboard_provider_health_uses_provider_and_model_signals(session) -> None:
+    p = await providers_svc.create_provider(
+        session,
+        ProviderCreate(name="p1", kind=ProviderKind.openai, base_url="https://x", api_key="k"),
+    )
+    m1, m2 = await models_svc.upsert_discovered(
+        session,
+        p.id,
+        [DiscoveredModel(model_id="ok-model"), DiscoveredModel(model_id="bad-model")],
+    )
+    await session.commit()
+
+    await results_svc.record_outcome(
+        session, p, None, ProbeTarget.list_models, ProbeOutcome(success=True, latency_ms=10)
+    )
+    await results_svc.record_outcome(
+        session, p, m1.id, ProbeTarget.chat_completion, ProbeOutcome(success=True, latency_ms=10)
+    )
+    await results_svc.record_outcome(
+        session, p, m2.id, ProbeTarget.chat_completion, ProbeOutcome(success=False, latency_ms=10)
+    )
+
+    dash = await results_svc.dashboard(session)
+    assert dash.providers[0].last_status == "degraded"
+    assert dash.totals["degraded"] == 1
+    assert dash.totals["ok"] == 0
+    assert dash.totals["failing"] == 0
+
+
+@pytest.mark.asyncio
+async def test_dashboard_provider_health_fails_when_list_models_fails(session) -> None:
+    p = await providers_svc.create_provider(
+        session,
+        ProviderCreate(name="p1", kind=ProviderKind.openai, base_url="https://x", api_key="k"),
+    )
+    m = (await models_svc.upsert_discovered(session, p.id, [DiscoveredModel(model_id="ok-model")]))[0]
+    await session.commit()
+
+    await results_svc.record_outcome(
+        session, p, m.id, ProbeTarget.chat_completion, ProbeOutcome(success=True, latency_ms=10)
+    )
+    await results_svc.record_outcome(
+        session, p, None, ProbeTarget.list_models, ProbeOutcome(success=False, latency_ms=10)
+    )
+
+    dash = await results_svc.dashboard(session)
+    assert dash.providers[0].last_status == "fail"
+    assert dash.totals["failing"] == 1
 
 
 @pytest.mark.asyncio
@@ -463,8 +515,9 @@ async def test_dashboard_ignores_list_models_probes_for_model_count(session) -> 
     dash = await results_svc.dashboard(session)
     # available_models counts the chat_completion failure as 0
     assert dash.totals["available_models"] == 0
-    # The list_models success still marks the provider as "ok"
-    assert dash.totals["ok"] == 1
+    # The list_models success marks the provider reachable, but all enabled
+    # models failed, so the provider health is failing.
+    assert dash.totals["failing"] == 1
 
 
 # ---------- settings --------------------------------------------------------
@@ -477,3 +530,12 @@ async def test_upsert_settings_idempotent(session) -> None:
     out2 = await settings_svc.upsert_settings(session, {"a": "2"})
     assert out2[0].value == "2"
     assert (await settings_svc.get_setting(session, "a")) == "2"
+
+
+@pytest.mark.asyncio
+async def test_get_int_setting_uses_default_and_minimum(session) -> None:
+    assert await settings_svc.get_int_setting(session, "missing", 300) == 300
+    await settings_svc.upsert_settings(session, {"bad": "abc", "low": "3", "ok": "120"})
+    assert await settings_svc.get_int_setting(session, "bad", 300) == 300
+    assert await settings_svc.get_int_setting(session, "low", 300) == 10
+    assert await settings_svc.get_int_setting(session, "ok", 300) == 120

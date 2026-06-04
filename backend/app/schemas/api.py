@@ -135,6 +135,7 @@ class DashboardProvider(BaseModel):
     last_status: str | None
     availability_24h: float | None
     avg_latency_ms_24h: int | None
+    available_models_online: int
     favorite_models_online: int
     favorite_models_total: int
     favorite_models: list[DashboardFavoriteModel] = Field(default_factory=list)

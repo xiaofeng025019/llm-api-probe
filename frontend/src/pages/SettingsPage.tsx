@@ -5,10 +5,12 @@ import { withErrorToast, describeError } from "../lib/action";
 import { pushToast } from "../components/Toast";
 
 const KNOWN_KEYS = [
-  { key: "default_interval_seconds", desc: "默认检测间隔（秒）" },
-  { key: "default_timeout_seconds", desc: "默认超时（秒）" },
-  { key: "max_concurrency", desc: "全局最大并发探测数" },
-  { key: "retention_days", desc: "历史结果保留天数" },
+  { key: "default_interval_seconds", desc: "默认模型清单更新间隔（秒）", defaultValue: "300" },
+  { key: "favorite_model_interval_seconds", desc: "重点关注模型状态检测间隔（秒）", defaultValue: "300" },
+  { key: "regular_model_interval_seconds", desc: "普通模型状态检测间隔（秒）", defaultValue: "600" },
+  { key: "default_timeout_seconds", desc: "默认超时（秒）", defaultValue: "30" },
+  { key: "max_concurrency", desc: "全局最大并发探测数", defaultValue: "10" },
+  { key: "retention_days", desc: "历史结果保留天数", defaultValue: "30" },
 ];
 
 export function SettingsPage() {
@@ -21,7 +23,10 @@ export function SettingsPage() {
   async function load() {
     const s = await api.settings();
     setSettings(s);
-    setValues(Object.fromEntries(s.map((x) => [x.key, x.value])));
+    setValues({
+      ...Object.fromEntries(KNOWN_KEYS.map((x) => [x.key, x.defaultValue])),
+      ...Object.fromEntries(s.map((x) => [x.key, x.value])),
+    });
   }
 
   useEffect(() => {
@@ -43,9 +48,9 @@ export function SettingsPage() {
     }
   }
 
-  async function doExport(includeKeys: boolean) {
+  async function doExport() {
     try {
-      const data = await withErrorToast(api.exportConfig(includeKeys), "导出");
+      const data = await withErrorToast(api.exportConfig(), "导出");
       const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
@@ -58,7 +63,7 @@ export function SettingsPage() {
     }
   }
 
-  async function doImport(includeKeys: boolean) {
+  async function doImport() {
     setImportErr(null);
     const input = document.createElement("input");
     input.type = "file";
@@ -70,7 +75,7 @@ export function SettingsPage() {
         const text = await file.text();
         const payload = JSON.parse(text);
         const r = await withErrorToast(
-          api.importConfig(payload, includeKeys),
+          api.importConfig(payload),
           "导入",
         );
         setMsg(`✓ 导入：新建 ${r.providers_created}，更新 ${r.providers_updated}`);
@@ -173,28 +178,34 @@ export function SettingsPage() {
             导入 / 导出
           </div>
         </div>
-        <div className="card">
-          <p className="muted" style={{ marginTop: 0 }}>
-            配置文件是 JSON 格式，包含 providers 元信息和 settings。
-          </p>
-          <div className="toolbar">
-            <button className="secondary" onClick={() => doExport(false)}>
-              <Icon.Download />
-              导出（不含 key）
-            </button>
-            <button onClick={() => doExport(true)}>
-              <Icon.Download />
-              导出（含 key）
-            </button>
-            <span className="grow" />
-            <button className="secondary" onClick={() => doImport(false)}>
-              <Icon.Upload />
-              导入（保留原 key）
-            </button>
-            <button onClick={() => doImport(true)}>
-              <Icon.Upload />
-              导入（覆盖 key）
-            </button>
+        <div className="card settings-transfer-card">
+          <div className="settings-transfer-grid">
+            <div className="settings-transfer-panel">
+              <div className="settings-transfer-icon">
+                <Icon.Download />
+              </div>
+              <div className="settings-transfer-copy">
+                <strong>导出配置</strong>
+                <span>下载当前 providers、重点关注模型和 settings 的 JSON 快照。</span>
+              </div>
+              <button className="secondary settings-transfer-action" onClick={() => doExport()}>
+                <Icon.Download />
+                导出配置
+              </button>
+            </div>
+            <div className="settings-transfer-panel">
+              <div className="settings-transfer-icon">
+                <Icon.Upload />
+              </div>
+              <div className="settings-transfer-copy">
+                <strong>导入配置</strong>
+                <span>选择 JSON 文件并更新 provider 配置、收藏模型和全局设置。</span>
+              </div>
+              <button className="settings-transfer-action" onClick={() => doImport()}>
+                <Icon.Upload />
+                导入配置
+              </button>
+            </div>
           </div>
           {importErr && <div className="error">{importErr}</div>}
         </div>

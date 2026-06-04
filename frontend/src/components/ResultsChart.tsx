@@ -9,6 +9,7 @@ import {
   YAxis,
 } from "recharts";
 import type { ProbeResult } from "../api/types";
+import { parseApiDate } from "../lib/format";
 
 interface Point {
   t: number;
@@ -22,7 +23,7 @@ export function ResultsChart({ results }: { results: ProbeResult[] }) {
       [...results]
         .reverse()
         .map((r) => ({
-          t: new Date(r.checked_at).getTime(),
+          t: parseApiDate(r.checked_at).getTime(),
           latency: r.success ? r.latency_ms ?? null : null,
           success: r.success ? 1 : 0,
         })),

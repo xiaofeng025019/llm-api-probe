@@ -25,6 +25,7 @@ from app.db.models import (
 from app.db.session import get_session_maker
 from app.probers import get_prober
 from app.services import results as results_svc
+from app.services import settings as settings_svc
 from app.services.models import disable_stale, upsert_discovered
 
 log = logging.getLogger(__name__)
@@ -209,10 +210,20 @@ async def sync_jobs_for_provider(provider_id: int, session_maker=None) -> None:
                     sched.remove_job(job.id)
             return
         enabled = provider.enabled
-        interval = max(10, provider.interval_seconds)
+        list_interval = max(10, provider.interval_seconds)
+        favorite_model_interval = await settings_svc.get_int_setting(
+            session,
+            settings_svc.FAVORITE_MODEL_INTERVAL_KEY,
+            settings_svc.DEFAULT_FAVORITE_MODEL_INTERVAL_SECONDS,
+        )
+        regular_model_interval = await settings_svc.get_int_setting(
+            session,
+            settings_svc.REGULAR_MODEL_INTERVAL_KEY,
+            settings_svc.DEFAULT_REGULAR_MODEL_INTERVAL_SECONDS,
+        )
         # ensure list_models job
         list_id = _make_job_id(provider_id, None, ProbeTarget.list_models)
-        _upsert_job(sched, list_id, provider_id, None, ProbeTarget.list_models, interval, enabled)
+        _upsert_job(sched, list_id, provider_id, None, ProbeTarget.list_models, list_interval, enabled)
         # per-model chat_completion jobs
         models = list(
             (await session.execute(select(Model).where(Model.provider_id == provider_id, Model.enabled)))
@@ -221,7 +232,8 @@ async def sync_jobs_for_provider(provider_id: int, session_maker=None) -> None:
         )
         for m in models:
             cid = _make_job_id(provider_id, m.id, ProbeTarget.chat_completion)
-            _upsert_job(sched, cid, provider_id, m.id, ProbeTarget.chat_completion, interval, enabled)
+            model_interval = favorite_model_interval if m.is_favorite else regular_model_interval
+            _upsert_job(sched, cid, provider_id, m.id, ProbeTarget.chat_completion, model_interval, enabled)
         # remove jobs for models that disappeared
         keep = {_make_job_id(provider_id, m.id, ProbeTarget.chat_completion) for m in models}
         keep.add(list_id)

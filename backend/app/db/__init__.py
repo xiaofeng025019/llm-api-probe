@@ -17,6 +17,8 @@ log = logging.getLogger(__name__)
 
 DEFAULT_SETTINGS: dict[str, str] = {
     "default_interval_seconds": "300",
+    "favorite_model_interval_seconds": "300",
+    "regular_model_interval_seconds": "600",
     "default_timeout_seconds": "30",
     "max_concurrency": "10",
     "retention_days": "30",

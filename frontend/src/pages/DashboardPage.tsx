@@ -1,20 +1,26 @@
+import { useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import { useDashboard } from "../hooks/useDashboard";
-import { formatPercent, formatRelative, statusColor } from "../lib/format";
-import { api, type Provider } from "../api/types";
+import { formatMs, formatPercent, formatRelative, modelTypeColor, statusColor } from "../lib/format";
+import { modelStatusIntervalLabel, modelStatusIntervalValue } from "../lib/settings";
+import { api, type DashboardFavoriteModel, type Provider } from "../api/types";
 import { withErrorToast } from "../lib/action";
 import {
   IconPlay,
   IconRefresh,
   IconDelete,
+  IconPlus,
   IconServer,
   IconCheck,
   IconStarOutline,
   KindIcon,
+  IconActivity,
+  IconClock,
 } from "../components/Icons";
 import { CountUp } from "../components/CountUp";
 import { Skeleton, SkeletonProviderCard, SkeletonStat } from "../components/Skeleton";
 import { pushToast } from "../components/Toast";
+import { ProviderDialog } from "./ProvidersPage";
 
 /** Build the secondary line for the Favorite Models card. Includes a
  *  delta vs 24h ago when the backend supplies favorites_online_24h_ago
@@ -37,9 +43,21 @@ function favoritesSub(totals: {
   return `${base} · ${sign}${Math.abs(delta)} ${word} vs 24h 前`;
 }
 
+function modelStatusLabel(model: DashboardFavoriteModel): string {
+  if (!model.enabled) return "disabled";
+  if (model.status === "ok") return "online";
+  if (model.status === "fail") return "failing";
+  return "unknown";
+}
+
 export function DashboardPage() {
   const nav = useNavigate();
-  const { dashboard, providers, loading, error, refresh } = useDashboard();
+  const { dashboard, providers, settings, loading, error, refresh } = useDashboard();
+  const [runningProviders, setRunningProviders] = useState<Record<number, boolean>>({});
+  const [showAddProvider, setShowAddProvider] = useState(false);
+  const activeDashboardProviders = dashboard?.providers.filter((p) => p.enabled) ?? [];
+  const statusIntervalLabel = modelStatusIntervalLabel(settings);
+  const statusIntervalValue = modelStatusIntervalValue(settings);
 
   async function onDelete(p: Provider) {
     if (!confirm(`删除 provider ${p.name}?`)) return;
@@ -92,7 +110,8 @@ export function DashboardPage() {
         <div className="stat-grid stagger">
           <StatCard
             label="Providers"
-            value={dashboard.totals.providers}
+            value={`${activeDashboardProviders.length} / ${dashboard.totals.providers}`}
+            sub="开启监测"
             icon={<IconServer />}
             accentColor="var(--primary)"
             to="/providers"
@@ -123,7 +142,6 @@ export function DashboardPage() {
             value={`${dashboard.totals.favorites_online} / ${dashboard.totals.favorites_total}`}
             icon={<IconStarOutline filled />}
             accentColor="var(--warn)"
-            to="/models"
             sub={favoritesSub(dashboard.totals)}
             progress={
               dashboard.totals.favorites_total > 0
@@ -134,22 +152,23 @@ export function DashboardPage() {
         </div>
       )}
 
-      {dashboard && dashboard.providers.length > 0 && (
+      {dashboard && activeDashboardProviders.length > 0 && (
         <div className="section">
           <div className="section-header">
             <div className="section-title">
               <IconServer />
               Providers
             </div>
-            <span className="muted">{dashboard.providers.length} 个</span>
+            <span className="muted">{activeDashboardProviders.length} 个开启监测</span>
           </div>
-          <div className="provider-grid stagger">
-            {dashboard.providers.map((p) => {
+          <div className="dashboard-provider-list stagger">
+            {activeDashboardProviders.map((p) => {
               const provider = providers.find((x) => x.id === p.provider_id);
+              const isRunning = !!runningProviders[p.provider_id];
               return (
                 <article
                   key={p.provider_id}
-                  className="provider-card"
+                  className="provider-card dashboard-provider-card"
                   style={{ ["--status-color" as string]: statusColor(p.last_status) }}
                   onClick={() => nav(`/providers/${p.provider_id}`)}
                   onKeyDown={(e) => {
@@ -171,11 +190,9 @@ export function DashboardPage() {
                           aria-label={`Status: ${p.last_status ?? "unknown"}`}
                         />
                         {p.name}
-                        {!p.enabled && (
-                          <span className="pill" style={{ marginLeft: 6 }}>
-                            disabled
-                          </span>
-                        )}
+                        <span className={`pill ${p.last_status ?? "unknown"}`}>
+                          {p.last_status ?? "unknown"}
+                        </span>
                       </div>
                       <div className="meta">
                         <span className="kind-badge">
@@ -185,59 +202,100 @@ export function DashboardPage() {
                           {p.model_count} models · {formatRelative(p.last_checked_at)}
                         </span>
                       </div>
+                      <div className="dashboard-monitoring-line">
+                        <span className="pill ok">Monitoring on</span>
+                        <span className="muted">{statusIntervalLabel}</span>
+                        {isRunning && <span className="pill info">状态检测已排队</span>}
+                      </div>
                     </div>
                   </div>
 
-                  <div className="metrics">
-                    <div className="metric">
-                      <div className="label">24h 可用率</div>
-                      <div
-                        className="value"
-                        style={{
-                          color:
-                            p.availability_24h == null
-                              ? "var(--muted)"
-                              : p.availability_24h >= 99
-                                ? "var(--ok)"
-                                : p.availability_24h >= 90
-                                  ? "var(--warn)"
-                                  : "var(--fail)",
-                        }}
-                      >
-                        {formatPercent(p.availability_24h)}
+                  <div className="dashboard-provider-body">
+                    <div className="dashboard-provider-summary">
+                      <div className="metrics">
+                        <div className="metric">
+                          <div className="label">24h 可用率</div>
+                          <div
+                            className="value"
+                            style={{
+                              color:
+                                p.availability_24h == null
+                                  ? "var(--muted)"
+                                  : p.availability_24h >= 99
+                                    ? "var(--ok)"
+                                    : p.availability_24h >= 90
+                                      ? "var(--warn)"
+                                      : "var(--fail)",
+                            }}
+                          >
+                            {formatPercent(p.availability_24h)}
+                          </div>
+                        </div>
+                        <div className="metric">
+                          <div className="label">平均延迟</div>
+                          <div className="value">
+                            {p.avg_latency_ms_24h != null ? (
+                              <>
+                                <CountUp value={p.avg_latency_ms_24h} />
+                                <span style={{ fontSize: 13, marginLeft: 2 }}>ms</span>
+                              </>
+                            ) : (
+                              "—"
+                            )}
+                          </div>
+                        </div>
+                        <div className="metric">
+                          <div className="label">模型状态检测</div>
+                          <div className="value">
+                            {statusIntervalValue}
+                          </div>
+                        </div>
+                        <div className="metric dashboard-wide-metric">
+                          <div className="label">Available Models</div>
+                          <div className="value">
+                            {p.model_count > 0
+                              ? `${p.available_models_online} / ${p.model_count}`
+                              : "—"}
+                          </div>
+                        </div>
+                        <div className="metric dashboard-wide-metric">
+                          <div className="label">Favorite Models</div>
+                          <div className="value">
+                            {p.favorite_models_total > 0
+                              ? `${p.favorite_models_online} / ${p.favorite_models_total}`
+                              : "—"}
+                          </div>
+                        </div>
                       </div>
                     </div>
-                    <div className="metric">
-                      <div className="label">平均延迟</div>
-                      <div className="value">
-                        {p.avg_latency_ms_24h != null ? (
-                          <>
-                            <CountUp value={p.avg_latency_ms_24h} />
-                            <span style={{ fontSize: 13, marginLeft: 2 }}>ms</span>
-                          </>
+
+                    <div className="dashboard-model-panels">
+                      <div className="dashboard-model-panel">
+                        <div className="dashboard-favorites-head">
+                          <span>
+                            <IconStarOutline filled />
+                            重点关注模型
+                          </span>
+                          <strong>
+                            {p.favorite_models_online}/{p.favorite_models_total}
+                          </strong>
+                        </div>
+                        {(p.favorite_models ?? []).length > 0 ? (
+                          <div className="favorite-model-list">
+                            {(p.favorite_models ?? []).map((model) => (
+                              <FavoriteModelStatus
+                                key={model.id}
+                                model={model}
+                                providerId={p.provider_id}
+                                providerName={p.name}
+                                onRefresh={refresh}
+                              />
+                            ))}
+                          </div>
                         ) : (
-                          "—"
-                        )}
-                      </div>
-                    </div>
-                    <div className="metric">
-                      <div className="label">收藏在线</div>
-                      <div className="value">
-                        {p.favorite_models_total > 0
-                          ? `${p.favorite_models_online}/${p.favorite_models_total}`
-                          : "—"}
-                      </div>
-                    </div>
-                    <div className="metric">
-                      <div className="label">检测间隔</div>
-                      <div className="value">
-                        {provider ? (
-                          <>
-                            <CountUp value={provider.interval_seconds} />
-                            <span style={{ fontSize: 13, marginLeft: 2 }}>s</span>
-                          </>
-                        ) : (
-                          "—"
+                          <div className="favorite-model-empty">
+                            暂无收藏模型，在 Models 或 Provider 详情页标记重点关注。
+                          </div>
                         )}
                       </div>
                     </div>
@@ -250,34 +308,52 @@ export function DashboardPage() {
                   >
                     <button
                       className="secondary sm"
+                      disabled={isRunning}
                       onClick={async () => {
+                        setRunningProviders((prev) => ({ ...prev, [p.provider_id]: true }));
                         try {
                           await api.runNow(p.provider_id);
-                          pushToast("info", "已触发探测", p.name);
+                          pushToast("info", "状态检测已排队", p.name);
+                          window.setTimeout(() => {
+                            void refresh().finally(() => {
+                              setRunningProviders((prev) => {
+                                const next = { ...prev };
+                                delete next[p.provider_id];
+                                return next;
+                              });
+                            });
+                          }, 8_000);
                         } catch (e) {
+                          setRunningProviders((prev) => {
+                            const next = { ...prev };
+                            delete next[p.provider_id];
+                            return next;
+                          });
                           pushToast("fail", "触发失败", e instanceof Error ? e.message : String(e));
                         }
                       }}
-                      aria-label="立即探测"
+                      title="检测当前模型可用性、延迟和错误状态"
+                      aria-label="检测状态"
                     >
-                      <IconPlay />
-                      Run
+                      {isRunning ? <span className="spinner" /> : <IconPlay />}
+                      {isRunning ? "检测中..." : "检测状态"}
                     </button>
                     <button
                       className="secondary sm"
                       onClick={async () => {
                         try {
                           await api.syncModels(p.provider_id);
-                          pushToast("ok", "已同步", p.name);
+                          pushToast("ok", "模型清单已更新", p.name);
                           await refresh();
                         } catch (e) {
-                          pushToast("fail", "同步失败", e instanceof Error ? e.message : String(e));
+                          pushToast("fail", "更新失败", e instanceof Error ? e.message : String(e));
                         }
                       }}
-                      aria-label="同步模型"
+                      title="从 provider 重新拉取可提供的模型列表"
+                      aria-label="更新模型清单"
                     >
                       <IconRefresh />
-                      Sync
+                      更新模型清单
                     </button>
                     {provider && (
                       <button
@@ -293,6 +369,19 @@ export function DashboardPage() {
                 </article>
               );
             })}
+            <button
+              className="dashboard-add-provider-card"
+              onClick={() => setShowAddProvider(true)}
+              aria-label="添加 Provider"
+            >
+              <span className="dashboard-add-provider-icon">
+                <IconPlus />
+              </span>
+              <span className="dashboard-add-provider-copy">
+                <strong>添加 Provider</strong>
+                <span>接入新的 LLM 服务商并配置监测频率</span>
+              </span>
+            </button>
           </div>
         </div>
       )}
@@ -306,14 +395,120 @@ export function DashboardPage() {
             <h3>还没有 provider</h3>
             <p>在 Providers 页面添加一个 LLM 服务商开始监测。</p>
             <button
-              onClick={() => nav("/providers")}
+              onClick={() => setShowAddProvider(true)}
               style={{ marginTop: 12 }}
             >
+              <IconPlus />
               添加 Provider
             </button>
           </div>
         </div>
       )}
+      {dashboard && dashboard.providers.length > 0 && activeDashboardProviders.length === 0 && !loading && (
+        <div className="card fade-up">
+          <div className="empty-state">
+            <div className="empty-state-icon">
+              <IconServer />
+            </div>
+            <h3>没有开启监测的 provider</h3>
+            <p>在 Providers 页面打开监测开关后，这里只展示正在监测的 provider。</p>
+            <button
+              onClick={() => nav("/providers")}
+              style={{ marginTop: 12 }}
+            >
+              <IconServer />
+              管理 Providers
+            </button>
+          </div>
+        </div>
+      )}
+      {showAddProvider && (
+        <ProviderDialog
+          onClose={() => setShowAddProvider(false)}
+          onSaved={refresh}
+        />
+      )}
+    </div>
+  );
+}
+
+function FavoriteModelStatus({
+  model,
+  providerId,
+  providerName,
+  onRefresh,
+}: {
+  model: DashboardFavoriteModel;
+  providerId: number;
+  providerName: string;
+  onRefresh: () => Promise<void>;
+}) {
+  const label = modelStatusLabel(model);
+  const statusClass = model.enabled ? (model.status ?? "unknown") : "warn";
+  const displayName = model.display_name || model.model_id;
+
+  return (
+    <div
+      className="favorite-model-item"
+      style={{ ["--model-type-color" as string]: modelTypeColor(model.type) }}
+    >
+      <div className="favorite-model-main">
+        <div className="favorite-model-title">
+          <span
+            className={`status-dot ${statusClass}`}
+            title={`Status: ${label}`}
+            aria-label={`Status: ${label}`}
+          />
+          <span className="favorite-model-name" title={model.model_id}>
+            {displayName}
+          </span>
+          <span className={`pill ${statusClass}`}>{label}</span>
+        </div>
+        <div className="favorite-model-meta">
+          <span className="favorite-model-type">{model.type}</span>
+          <span>{formatRelative(model.last_checked_at)}</span>
+          {model.error_code && <span className="favorite-model-error">{model.error_code}</span>}
+        </div>
+      </div>
+
+      <div className="favorite-model-stats" aria-label={`${displayName} metrics`}>
+        <div>
+          <span>24h</span>
+          <strong>{formatPercent(model.availability_24h)}</strong>
+        </div>
+        <div>
+          <span>
+            <IconClock />
+            Lat
+          </span>
+          <strong>{formatMs(model.latency_ms)}</strong>
+        </div>
+        <div>
+          <span>
+            <IconActivity />
+            TTFB
+          </span>
+          <strong>{formatMs(model.ttfb_ms)}</strong>
+        </div>
+      </div>
+
+      <button
+        className="ghost sm favorite-model-run"
+        onClick={async (e) => {
+          e.stopPropagation();
+          try {
+            await api.probeNow(providerId, model.id);
+            pushToast("info", "已触发模型探测", `${providerName} / ${displayName}`);
+            await onRefresh();
+          } catch (e) {
+            pushToast("fail", "触发失败", e instanceof Error ? e.message : String(e));
+          }
+        }}
+        aria-label={`立即探测 ${displayName}`}
+        title="立即探测"
+      >
+        <IconPlay />
+      </button>
     </div>
   );
 }

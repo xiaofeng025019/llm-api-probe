@@ -1,13 +1,15 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { api, ModelOut, ProbeResult, Provider } from "../api/types";
+import { api, ModelOut, ProbeResult, Provider, Setting } from "../api/types";
 import { withErrorToast } from "../lib/action";
 import {
   formatMs,
   formatRelative,
+  formatTime,
   modelTypeColor,
   statusColor,
 } from "../lib/format";
+import { modelStatusIntervalLabel } from "../lib/settings";
 import { useSse } from "../hooks/useSse";
 import { ResultsChart } from "../components/ResultsChart";
 import {
@@ -39,20 +41,26 @@ export function ProviderDetailPage() {
   const [provider, setProvider] = useState<Provider | null>(null);
   const [models, setModels] = useState<ModelOut[]>([]);
   const [results, setResults] = useState<ProbeResult[]>([]);
+  const [modelStatusResults, setModelStatusResults] = useState<ProbeResult[]>([]);
+  const [settings, setSettings] = useState<Setting[]>([]);
   const [window_, setWindow] = useState(WINDOWS[1]);
   const [error, setError] = useState<string | null>(null);
 
   async function refresh() {
     if (!Number.isFinite(providerId)) return;
     try {
-      const [p, ms, rs] = await Promise.all([
+      const [p, ms, rs, statusRs, ss] = await Promise.all([
         api.getProvider(providerId),
         api.models(providerId),
         api.results({ provider_id: providerId, hours: window_.hours, limit: 1000 }),
+        api.results({ provider_id: providerId, hours: 24 * 30, limit: 1000 }),
+        api.settings(),
       ]);
       setProvider(p);
       setModels(ms);
       setResults(rs);
+      setModelStatusResults(statusRs);
+      setSettings(ss);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
@@ -68,6 +76,15 @@ export function ProviderDetailPage() {
       void refresh();
     }
   });
+
+  const latestResultByModel = useMemo(() => {
+    const byModel = new Map<number, ProbeResult>();
+    for (const r of modelStatusResults) {
+      if (r.model_id == null || r.target !== "chat_completion") continue;
+      if (!byModel.has(r.model_id)) byModel.set(r.model_id, r);
+    }
+    return byModel;
+  }, [modelStatusResults]);
 
   // keyboard: arrow keys on window tabs
   function onWindowKey(e: React.KeyboardEvent, idx: number) {
@@ -108,6 +125,7 @@ export function ProviderDetailPage() {
           .reduce((a, r) => a + (r.latency_ms ?? 0), 0) /
         Math.max(1, results.filter((r) => r.success).length)
       : null;
+  const statusIntervalLabel = modelStatusIntervalLabel(settings);
 
   return (
     <div>
@@ -140,7 +158,11 @@ export function ProviderDetailPage() {
             <h1>{provider.name}</h1>
             <div className="meta">
               <span>
-                <IconClock /> 每 {provider.interval_seconds}s 检测
+                <IconClock /> 模型清单每 {provider.interval_seconds}s 更新
+              </span>
+              <span>·</span>
+              <span>
+                状态检测：{statusIntervalLabel}
               </span>
               <span>·</span>
               <span>
@@ -159,19 +181,23 @@ export function ProviderDetailPage() {
               className="secondary"
               onClick={async () => {
                 try {
-                  await withErrorToast(api.syncModels(providerId), "同步模型");
+                  await withErrorToast(api.syncModels(providerId), "更新模型清单");
                   await refresh();
                 } catch {
                   /* toast already shown */
                 }
               }}
+              title="从 provider 重新拉取可提供的模型列表"
             >
               <IconRefresh />
-              同步模型
+              更新模型清单
             </button>
-            <button onClick={() => withErrorToast(api.runNow(providerId), "立即检测").then(refresh)}>
+            <button
+              onClick={() => withErrorToast(api.runNow(providerId), "检测状态").then(refresh)}
+              title="检测当前模型可用性、延迟和错误状态"
+            >
               <IconPlay />
-              立即检测
+              检测状态
             </button>
           </div>
         </div>
@@ -267,8 +293,12 @@ export function ProviderDetailPage() {
                   <span className="sr-only">Favorite</span>
                 </th>
                 <th scope="col">Model</th>
+                <th scope="col">Status</th>
                 <th scope="col">Type</th>
                 <th scope="col">Enabled</th>
+                <th scope="col">Last probe</th>
+                <th scope="col">Latency</th>
+                <th scope="col">TTFB</th>
                 <th scope="col">Last seen</th>
                 <th style={{ width: 100 }} scope="col">
                   <span className="sr-only">Actions</span>
@@ -276,82 +306,107 @@ export function ProviderDetailPage() {
               </tr>
             </thead>
             <tbody>
-              {models.map((m) => (
-                <tr key={m.id}>
-                  <td>
-                    <button
-                      className={`favorite-star ${m.is_favorite ? "active" : ""}`}
-                      onClick={() =>
-                        api
-                          .patchModel(m.id, { is_favorite: !m.is_favorite })
-                          .then(refresh)
-                      }
-                      aria-label={m.is_favorite ? "取消收藏" : "收藏"}
-                      aria-pressed={m.is_favorite}
-                    >
-                      <IconStarOutline filled={m.is_favorite} />
-                    </button>
-                  </td>
-                  <td>
-                    <strong>{m.model_id}</strong>
-                  </td>
-                  <td>
-                    <span
-                      className="type-icon"
-                      style={{ background: modelTypeColor(m.type) }}
-                    >
-                      {m.type}
-                    </span>
-                  </td>
-                  <td>
-                    <label
-                      style={{
-                        display: "inline-flex",
-                        alignItems: "center",
-                        gap: 6,
-                        cursor: "pointer",
-                      }}
-                    >
-                      <input
-                        type="checkbox"
-                        checked={m.enabled}
-                        onChange={() =>
-                          withErrorToast(
-                            api.patchModel(m.id, { enabled: !m.enabled }),
-                            "切换 enabled",
-                          ).then(refresh)
+              {models.map((m) => {
+                const latest = latestResultByModel.get(m.id);
+                const status = !m.enabled ? "disabled" : latest?.success ? "ok" : latest ? "fail" : "unknown";
+                return (
+                  <tr key={m.id}>
+                    <td>
+                      <button
+                        className={`favorite-star ${m.is_favorite ? "active" : ""}`}
+                        onClick={() =>
+                          api
+                            .patchModel(m.id, { is_favorite: !m.is_favorite })
+                            .then(refresh)
                         }
-                        aria-label={`Enable ${m.model_id}`}
-                      />
-                      <span style={{ fontSize: 12 }}>
-                        {m.enabled ? "on" : "off"}
+                        aria-label={m.is_favorite ? "取消收藏" : "收藏"}
+                        aria-pressed={m.is_favorite}
+                      >
+                        <IconStarOutline filled={m.is_favorite} />
+                      </button>
+                    </td>
+                    <td>
+                      <div className="model-name-cell">
+                        <strong>{m.model_id}</strong>
+                        {m.display_name && <span>{m.display_name}</span>}
+                      </div>
+                    </td>
+                    <td>
+                      <span className={`model-status-pill ${status}`}>
+                        <span className={`status-dot ${status === "disabled" ? "warn" : status}`} />
+                        {status}
                       </span>
-                    </label>
-                  </td>
-                  <td className="muted">
-                    <span title={new Date(m.last_seen_at).toLocaleString()}>
-                      {formatRelative(m.last_seen_at)}
-                    </span>
-                  </td>
-                  <td>
-                    <button
-                      className="secondary sm"
-                      onClick={() =>
-                        withErrorToast(api.probeNow(providerId, m.id), "Probe").then(refresh)
-                      }
-                      aria-label={`单独探测 ${m.model_id}`}
-                    >
-                      <IconProbe />
-                      Probe
-                    </button>
-                  </td>
-                </tr>
-              ))}
+                    </td>
+                    <td>
+                      <span
+                        className="type-icon"
+                        style={{ background: modelTypeColor(m.type) }}
+                      >
+                        {m.type}
+                      </span>
+                    </td>
+                    <td>
+                      <label
+                        style={{
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: 6,
+                          cursor: "pointer",
+                        }}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={m.enabled}
+                          onChange={() =>
+                            withErrorToast(
+                              api.patchModel(m.id, { enabled: !m.enabled }),
+                              "切换 enabled",
+                            ).then(refresh)
+                          }
+                          aria-label={`Enable ${m.model_id}`}
+                        />
+                        <span style={{ fontSize: 12 }}>
+                          {m.enabled ? "on" : "off"}
+                        </span>
+                      </label>
+                    </td>
+                    <td className="muted">
+                      {latest ? (
+                        <span title={formatTime(latest.checked_at)}>
+                          {formatRelative(latest.checked_at)}
+                        </span>
+                      ) : (
+                        "—"
+                      )}
+                    </td>
+                    <td className="mono">{formatMs(latest?.latency_ms ?? null)}</td>
+                    <td className="mono">{formatMs(latest?.ttfb_ms ?? null)}</td>
+                    <td className="muted">
+                      <span title={formatTime(m.last_seen_at)}>
+                        {formatRelative(m.last_seen_at)}
+                      </span>
+                    </td>
+                    <td>
+                      <button
+                        className="secondary sm"
+                        onClick={() =>
+                          withErrorToast(api.probeNow(providerId, m.id), "检测模型").then(refresh)
+                        }
+                        aria-label={`检测模型 ${m.model_id}`}
+                        title="只检测这个模型的可用性和延迟"
+                      >
+                        <IconProbe />
+                        检测模型
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })}
               {models.length === 0 && (
                 <tr>
-                  <td colSpan={6}>
+                  <td colSpan={10}>
                     <div className="empty-state">
-                      <p>没有模型。点 “同步模型” 拉取。</p>
+                      <p>没有模型。点 “更新模型清单” 拉取。</p>
                     </div>
                   </td>
                 </tr>

@@ -64,6 +64,36 @@ async def cleanup_old(session: AsyncSession, retention_days: int) -> int:
     return getattr(res, "rowcount", 0)
 
 
+def _provider_health_status(
+    *,
+    provider_enabled: bool,
+    latest_list_models: ProbeResult | None,
+    enabled_model_ids: list[int],
+    recent_per_model: dict[int, bool],
+) -> str | None:
+    if not provider_enabled:
+        return None
+    if latest_list_models is not None and not latest_list_models.success:
+        return "fail"
+
+    if enabled_model_ids:
+        known = [recent_per_model[m_id] for m_id in enabled_model_ids if m_id in recent_per_model]
+        if known:
+            online = sum(1 for ok in known if ok)
+            if online == len(enabled_model_ids):
+                return "ok"
+            if online == 0 and len(known) == len(enabled_model_ids):
+                return "fail"
+            return "degraded"
+        if latest_list_models is not None and latest_list_models.success:
+            return "degraded"
+        return None
+
+    if latest_list_models is not None:
+        return "ok" if latest_list_models.success else "fail"
+    return None
+
+
 async def dashboard(session: AsyncSession) -> DashboardOut:
     now = datetime.now(UTC)
     cutoff_24h = now - timedelta(hours=24)
@@ -133,6 +163,7 @@ async def dashboard(session: AsyncSession) -> DashboardOut:
         "providers": 0,
         "models": 0,
         "ok": 0,
+        "degraded": 0,
         "failing": 0,
         "available_models": 0,
         "favorites_online": 0,
@@ -149,6 +180,21 @@ async def dashboard(session: AsyncSession) -> DashboardOut:
             .limit(1)
         )
         last_row = last.scalars().first()
+        latest_list_models = (
+            (
+                await session.execute(
+                    select(ProbeResult)
+                    .where(
+                        ProbeResult.provider_id == p.id,
+                        ProbeResult.target == ProbeTarget.list_models,
+                    )
+                    .order_by(ProbeResult.checked_at.desc())
+                    .limit(1)
+                )
+            )
+            .scalars()
+            .first()
+        )
         recent = await session.execute(
             select(
                 func.count(ProbeResult.id),
@@ -161,8 +207,16 @@ async def dashboard(session: AsyncSession) -> DashboardOut:
         if cnt and cnt > 0:
             avail = round((succ or 0) / cnt * 100, 2)
         avg_lat_ms = int(avg_lat) if avg_lat is not None else None
+        enabled_models = [m for m in models if m.enabled]
+        provider_status = _provider_health_status(
+            provider_enabled=p.enabled,
+            latest_list_models=latest_list_models,
+            enabled_model_ids=[m.id for m in enabled_models],
+            recent_per_model=recent_per_model,
+        )
 
         favorites = [m for m in models if m.is_favorite]
+        available_models_online = sum(1 for m in models if recent_per_model.get(m.id))
         # Use the same "most recent probe per model" semantics as
         # available_models: a favorite is "online" iff its latest
         # 24h probe succeeded. The previous distinct() logic counted
@@ -199,9 +253,10 @@ async def dashboard(session: AsyncSession) -> DashboardOut:
                 enabled=p.enabled,
                 model_count=len(models),
                 last_checked_at=last_row.checked_at if last_row else None,
-                last_status=("ok" if last_row and last_row.success else "fail" if last_row else None),
+                last_status=provider_status,
                 availability_24h=avail,
                 avg_latency_ms_24h=avg_lat_ms,
+                available_models_online=available_models_online,
                 favorite_models_online=online,
                 favorite_models_total=len(favorites),
                 favorite_models=favorite_models,
@@ -209,9 +264,11 @@ async def dashboard(session: AsyncSession) -> DashboardOut:
         )
         totals["providers"] += 1
         totals["models"] += len(models)
-        if last_row and last_row.success:
+        if provider_status == "ok":
             totals["ok"] += 1
-        elif last_row:
+        elif provider_status == "degraded":
+            totals["degraded"] += 1
+        elif provider_status == "fail":
             totals["failing"] += 1
         # Model-level: count how many of this provider's models had a
         # successful probe in the last 24h.

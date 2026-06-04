@@ -97,6 +97,17 @@ async def test_provider_404(api_client: httpx.AsyncClient) -> None:
     assert r.status_code == 404
 
 
+@pytest.mark.asyncio
+async def test_provider_run_disabled_returns_409(api_client: httpx.AsyncClient) -> None:
+    r = await api_client.post(
+        "/api/v1/providers",
+        json={"name": "p1", "kind": "openai", "base_url": "https://x", "api_key": "k", "enabled": False},
+    )
+    pid = r.json()["data"]["id"]
+    r = await api_client.post(f"/api/v1/providers/{pid}/run")
+    assert r.status_code == 409
+
+
 # ---------- models + sync-models -------------------------------------------
 
 

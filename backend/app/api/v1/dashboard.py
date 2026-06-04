@@ -61,6 +61,7 @@ async def list_settings(session: AsyncSession = Depends(get_session)) -> ApiResp
 @router.put("/settings", response_model=ApiResponse)
 async def put_settings(body: SettingPut, session: AsyncSession = Depends(get_session)) -> ApiResponse:
     out = await settings_svc.upsert_settings(session, body.items)
+    await sync_all_jobs()
     return ApiResponse(data=[SettingOut.model_validate(s) for s in out])
 
 

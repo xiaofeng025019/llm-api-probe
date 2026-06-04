@@ -86,6 +86,7 @@ async def sync_models(provider_id: int, session: AsyncSession = Depends(get_sess
         )
     if outcome.models:
         await models_svc.upsert_discovered(session, provider_id, outcome.models)
+        await sync_jobs_for_provider(provider_id)
     models = await models_svc.list_models(session, provider_id)
     return ApiResponse(data=[ModelOut.model_validate(m) for m in models])
 
@@ -101,5 +102,10 @@ async def run_now(provider_id: int, session: AsyncSession = Depends(get_session)
     p = await providers_svc.get_provider(session, provider_id)
     if p is None:
         raise HTTPException(status_code=404, detail="provider not found")
-    await trigger_now(provider_id, None)
+    scheduled = await trigger_now(provider_id, None)
+    if not scheduled:
+        raise HTTPException(
+            status_code=409,
+            detail="provider is disabled; enable it before triggering a probe",
+        )
     return ApiResponse(data={"scheduled": True})

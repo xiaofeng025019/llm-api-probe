@@ -33,6 +33,21 @@ export interface ModelOut {
   last_seen_at: string;
 }
 
+export interface DashboardFavoriteModel {
+  id: number;
+  model_id: string;
+  display_name: string | null;
+  type: ModelType;
+  enabled: boolean;
+  status: "ok" | "fail" | null;
+  last_checked_at: string | null;
+  latency_ms: number | null;
+  ttfb_ms: number | null;
+  error_code: string | null;
+  error_message: string | null;
+  availability_24h: number | null;
+}
+
 export interface DashboardProvider {
   provider_id: number;
   name: string;
@@ -40,11 +55,13 @@ export interface DashboardProvider {
   enabled: boolean;
   model_count: number;
   last_checked_at: string | null;
-  last_status: "ok" | "fail" | null;
+  last_status: "ok" | "degraded" | "fail" | null;
   availability_24h: number | null;
   avg_latency_ms_24h: number | null;
+  available_models_online: number;
   favorite_models_online: number;
   favorite_models_total: number;
+  favorite_models: DashboardFavoriteModel[];
 }
 
 export interface Dashboard {
@@ -53,6 +70,7 @@ export interface Dashboard {
     providers: number;
     models: number;
     ok: number;
+    degraded?: number;
     failing: number;
     /** Number of models whose most recent probe in the last 24h succeeded. */
     available_models?: number;
@@ -148,11 +166,11 @@ export const api = {
       method: "PUT",
       body: JSON.stringify({ items }),
     }),
-  exportConfig: (includeKeys: boolean) =>
-    request<unknown>(`/api/v1/export?include_keys=${includeKeys}`, { method: "POST" }),
-  importConfig: (payload: unknown, includeKeys: boolean) =>
+  exportConfig: () =>
+    request<unknown>("/api/v1/export", { method: "POST" }),
+  importConfig: (payload: unknown) =>
     request<{ providers_created: number; providers_updated: number }>(
-      `/api/v1/import?include_keys=${includeKeys}`,
+      "/api/v1/import",
       { method: "POST", body: JSON.stringify(payload) },
     ),
   probeNow: (providerId?: number, modelId?: number) => {
@@ -162,4 +180,3 @@ export const api = {
     return request<{ scheduled: boolean }>(`/api/v1/probe/run?${q.toString()}`, { method: "POST" });
   },
 };
-

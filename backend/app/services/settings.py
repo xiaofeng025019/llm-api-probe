@@ -7,6 +7,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import Setting
 
+FAVORITE_MODEL_INTERVAL_KEY = "favorite_model_interval_seconds"
+REGULAR_MODEL_INTERVAL_KEY = "regular_model_interval_seconds"
+DEFAULT_FAVORITE_MODEL_INTERVAL_SECONDS = 300
+DEFAULT_REGULAR_MODEL_INTERVAL_SECONDS = 600
+
 
 async def list_settings(session: AsyncSession) -> list[Setting]:
     res = await session.execute(select(Setting).order_by(Setting.key))
@@ -16,6 +21,17 @@ async def list_settings(session: AsyncSession) -> list[Setting]:
 async def get_setting(session: AsyncSession, key: str) -> str | None:
     s = await session.get(Setting, key)
     return s.value if s else None
+
+
+async def get_int_setting(session: AsyncSession, key: str, default: int, minimum: int = 10) -> int:
+    value = await get_setting(session, key)
+    if value is None:
+        return default
+    try:
+        parsed = int(value)
+    except ValueError:
+        return default
+    return max(minimum, parsed)
 
 
 async def upsert_settings(session: AsyncSession, items: dict[str, str]) -> list[Setting]:
