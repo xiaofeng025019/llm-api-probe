@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { api, Setting } from "../api/types";
 import { Icon } from "../components/Icons";
+import { withErrorToast, describeError } from "../lib/action";
+import { pushToast } from "../components/Toast";
 
 const KNOWN_KEYS = [
   { key: "default_interval_seconds", desc: "默认检测间隔（秒）" },
@@ -30,25 +32,30 @@ export function SettingsPage() {
     setBusy(true);
     setMsg(null);
     try {
-      await api.putSettings(values);
+      await withErrorToast(api.putSettings(values), "保存");
       setMsg("✓ 已保存");
       await load();
     } catch (e) {
-      setMsg(e instanceof Error ? e.message : String(e));
+      const { detail } = describeError(e);
+      setMsg(detail ?? "保存失败");
     } finally {
       setBusy(false);
     }
   }
 
   async function doExport(includeKeys: boolean) {
-    const data = await api.exportConfig(includeKeys);
-    const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `llm-usability-config-${new Date().toISOString().slice(0, 10)}.json`;
-    a.click();
-    URL.revokeObjectURL(url);
+    try {
+      const data = await withErrorToast(api.exportConfig(includeKeys), "导出");
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `llm-usability-config-${new Date().toISOString().slice(0, 10)}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      /* toast already shown */
+    }
   }
 
   async function doImport(includeKeys: boolean) {
@@ -62,11 +69,16 @@ export function SettingsPage() {
       try {
         const text = await file.text();
         const payload = JSON.parse(text);
-        const r = await api.importConfig(payload, includeKeys);
+        const r = await withErrorToast(
+          api.importConfig(payload, includeKeys),
+          "导入",
+        );
         setMsg(`✓ 导入：新建 ${r.providers_created}，更新 ${r.providers_updated}`);
         await load();
+        pushToast("ok", "导入完成", `新建 ${r.providers_created}, 更新 ${r.providers_updated}`);
       } catch (e) {
-        setImportErr(e instanceof Error ? e.message : String(e));
+        const { detail } = describeError(e);
+        setImportErr(detail ?? "导入失败");
       }
     };
     input.click();

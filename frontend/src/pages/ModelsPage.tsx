@@ -3,6 +3,7 @@ import { useDashboard } from "../hooks/useDashboard";
 import { formatRelative, modelTypeColor } from "../lib/format";
 import { api } from "../api/types";
 import { Icon } from "../components/Icons";
+import { withErrorToast } from "../lib/action";
 
 const TYPES = ["all", "chat", "vision", "audio", "image", "embedding", "code"] as const;
 
@@ -151,7 +152,10 @@ export function ModelsPage() {
                   <button
                     className="secondary sm"
                     onClick={() =>
-                      api.patchModel(r.model_id, { is_favorite: false }).then(refresh)
+                      withErrorToast(
+                        api.patchModel(r.model_id, { is_favorite: false }),
+                        "Unfavorite",
+                      ).then(refresh)
                     }
                     aria-label={`取消收藏 ${r.model}`}
                   >

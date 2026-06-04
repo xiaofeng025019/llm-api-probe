@@ -134,9 +134,24 @@ async def probe_run(
         raise HTTPException(status_code=400, detail="provider_id is required")
     if (await providers_svc.get_provider(session, provider_id)) is None:
         raise HTTPException(status_code=404, detail="provider not found")
-    if model_id is not None and (await models_svc.get_model(session, model_id)) is None:
-        raise HTTPException(status_code=404, detail="model not found")
-    await trigger_now(provider_id, model_id)
+    if model_id is not None:
+        m = await models_svc.get_model(session, model_id)
+        if m is None:
+            raise HTTPException(status_code=404, detail="model not found")
+        if m.provider_id != provider_id:
+            raise HTTPException(
+                status_code=400,
+                detail=f"model {model_id} does not belong to provider {provider_id}",
+            )
+    scheduled = await trigger_now(provider_id, model_id)
+    if not scheduled:
+        # The target job (or its model/provider) is disabled. Surface a 409 so
+        # the caller can show feedback instead of a silent no-op.
+        target = "model" if model_id is not None else "provider"
+        raise HTTPException(
+            status_code=409,
+            detail=f"{target} is disabled; enable it before triggering a probe",
+        )
     return ApiResponse(data={"scheduled": True})
 
 

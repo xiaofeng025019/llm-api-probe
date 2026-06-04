@@ -2,6 +2,7 @@ import { useNavigate } from "react-router-dom";
 import { useDashboard } from "../hooks/useDashboard";
 import { formatPercent, formatRelative, modelTypeBg, statusColor } from "../lib/format";
 import { api, type Provider } from "../api/types";
+import { withErrorToast } from "../lib/action";
 import {
   IconPlus,
   IconPlay,
@@ -41,11 +42,11 @@ export function DashboardPage() {
   async function onDelete(p: Provider) {
     if (!confirm(`删除 provider ${p.name}?`)) return;
     try {
-      await api.deleteProvider(p.id);
+      await withErrorToast(api.deleteProvider(p.id), "删除");
       pushToast("ok", "已删除", p.name);
       await refresh();
-    } catch (e) {
-      pushToast("fail", "删除失败", e instanceof Error ? e.message : String(e));
+    } catch {
+      /* toast already shown */
     }
   }
 
@@ -340,7 +341,10 @@ export function DashboardPage() {
                         <button
                           className={`favorite-star ${m.is_favorite ? "active" : ""}`}
                           onClick={() =>
-                            api.patchModel(m.id, { is_favorite: !m.is_favorite }).then(refresh)
+                            withErrorToast(
+                              api.patchModel(m.id, { is_favorite: !m.is_favorite }),
+                              "收藏切换",
+                            ).then(refresh)
                           }
                           aria-label={m.is_favorite ? "取消收藏" : "收藏"}
                           aria-pressed={m.is_favorite}

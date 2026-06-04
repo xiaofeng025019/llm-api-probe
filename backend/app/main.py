@@ -44,8 +44,20 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         sched.start()
     await sync_all_jobs()
     yield
+    # Shutdown order matters:
+    # 1) Stop accepting new job firings and wait for in-flight probes to
+    #    finish (capped so a slow upstream can't block forever).
+    # 2) Then close the shared httpx client.
+    # The previous wait=False was racy: a probe mid-stream when the client
+    # closed would raise StreamConsumed / ClientClosed and the outer
+    # except in _run_probe swallowed it, leaving ProbeResult and JobState
+    # uncommitted.
     if sched.running:
-        sched.shutdown(wait=False)
+        try:
+            sched.shutdown(wait=True)
+        except TypeError:
+            # APScheduler 3.x: shutdown(wait=True) blocks until done.
+            sched.shutdown()
     await aclose_client()
 
 
@@ -81,11 +93,19 @@ class SPAStaticFiles(StaticFiles):
         super().__init__(directory=directory, **kwargs)
         self.index_path = Path(index_path)
 
-    async def get_response(self, path: str, scope):  # type: ignore[override]
+    async def get_response(self, path: str, scope):
         # API routes are registered as APIRouter on the same app; if a request
         # for /api/* reaches this mount it means there is no matching route —
         # surface a real 404 instead of the SPA index.
         if path.startswith("api/") or path.startswith("/api/"):
+            from starlette.exceptions import HTTPException
+
+            raise HTTPException(status_code=404, detail="not found")
+        # If the URL has a file extension (e.g. .js, .css, .png), the browser
+        # expects that exact asset. Fallback would return 200 text/html for a
+        # missing JS file and the app would silently break with no status-code
+        # hint. Only return index.html for extension-less paths.
+        if "." in path.rsplit("/", 1)[-1]:
             from starlette.exceptions import HTTPException
 
             raise HTTPException(status_code=404, detail="not found")

@@ -12,6 +12,7 @@ from app.core.scheduler import (
     _run_probe,
     get_scheduler,
     sync_jobs_for_provider,
+    trigger_now,
 )
 from app.db.models import Model, ProbeResult, ProbeTarget
 from app.db.session import Base
@@ -103,4 +104,36 @@ async def test_sync_jobs_adds_and_removes(env) -> None:
         await s.commit()
     await sync_jobs_for_provider(env["provider_id"], session_maker=env["sm"])
     assert sched.get_jobs() == []
+
+
+@pytest.mark.asyncio
+async def test_trigger_now_returns_false_when_disabled(env) -> None:
+    # Disabled provider should reject the trigger so the API can surface a 409.
+    async with env["sm"]() as s:
+        from app.db.models import Provider
+
+        p = await s.get(Provider, env["provider_id"])
+        p.enabled = False
+        await s.commit()
+    assert await trigger_now(env["provider_id"], None, session_maker=env["sm"]) is False
+
+
+@pytest.mark.asyncio
+async def test_trigger_now_returns_true_when_enabled(env) -> None:
+    assert await trigger_now(env["provider_id"], None, session_maker=env["sm"]) is True
+
+
+@pytest.mark.asyncio
+async def test_trigger_now_returns_false_for_disabled_model(env) -> None:
+    async with env["sm"]() as s:
+        ms = await models_svc.upsert_discovered(
+            s, env["provider_id"], [DiscoveredModel(model_id="gpt-4o")]
+        )
+        await s.commit()
+        model_id = ms[0].id
+        # disable the model
+        m = await s.get(Model, model_id)
+        m.enabled = False
+        await s.commit()
+    assert await trigger_now(env["provider_id"], model_id, session_maker=env["sm"]) is False
 

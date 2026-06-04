@@ -4,6 +4,8 @@ import { api, Provider, ProviderKind } from "../api/types";
 import { useDashboard } from "../hooks/useDashboard";
 import { formatRelative, statusColor } from "../lib/format";
 import { Icon } from "../components/Icons";
+import { withErrorToast } from "../lib/action";
+import { pushToast } from "../components/Toast";
 
 export function ProvidersPage() {
   const nav = useNavigate();
@@ -127,7 +129,9 @@ export function ProvidersPage() {
                   </button>
                   <button
                     className="secondary sm"
-                    onClick={() => api.runNow(p.id).then(refresh)}
+                    onClick={() =>
+                      withErrorToast(api.runNow(p.id), "Run").then(refresh)
+                    }
                     aria-label={`立即探测 ${p.name}`}
                   >
                     <Icon.Run />
@@ -135,7 +139,9 @@ export function ProvidersPage() {
                   </button>
                   <button
                     className="secondary sm"
-                    onClick={() => api.syncModels(p.id).then(refresh)}
+                    onClick={() =>
+                      withErrorToast(api.syncModels(p.id), "Sync").then(refresh)
+                    }
                     aria-label={`同步模型 ${p.name}`}
                   >
                     <Icon.Sync />
@@ -145,8 +151,13 @@ export function ProvidersPage() {
                     className="ghost sm"
                     onClick={async () => {
                       if (!confirm(`删除 ${p.name}?`)) return;
-                      await api.deleteProvider(p.id);
-                      await refresh();
+                      try {
+                        await withErrorToast(api.deleteProvider(p.id), "删除");
+                        pushToast("ok", "已删除", p.name);
+                        await refresh();
+                      } catch {
+                        /* toast already shown */
+                      }
                     }}
                     title="删除"
                     aria-label={`删除 ${p.name}`}
@@ -194,20 +205,22 @@ function ProviderDialog({
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  // Close on Escape; focus the first input on mount.
+  // Close on Escape; focus the first input on mount. Run-once: empty deps
+  // so SSE-driven re-renders of the parent don't re-fire the focus, which
+  // would yank the user's caret out of whatever field they're editing.
   const modalRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();
     };
     document.addEventListener("keydown", onKey);
-    // focus first focusable element
     const first = modalRef.current?.querySelector<HTMLElement>(
       "input, select, textarea, button",
     );
     first?.focus();
     return () => document.removeEventListener("keydown", onKey);
-  }, [onClose]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   async function submit() {
     setBusy(true);
@@ -223,19 +236,22 @@ function ProviderDialog({
           enabled,
         };
         if (apiKey) body.api_key = apiKey;
-        await api.patchProvider(provider.id, body);
+        await withErrorToast(api.patchProvider(provider.id, body), isEdit ? "保存" : "创建");
       } else {
-        await api.createProvider({
-          name,
-          kind,
-          base_url: baseUrl,
-          api_key: apiKey,
-          proxy: proxy || null,
-          interval_seconds: intervalSec,
-          timeout_seconds: timeoutSec,
-          headers_json: headersJson || null,
-          enabled,
-        });
+        await withErrorToast(
+          api.createProvider({
+            name,
+            kind,
+            base_url: baseUrl,
+            api_key: apiKey,
+            proxy: proxy || null,
+            interval_seconds: intervalSec,
+            timeout_seconds: timeoutSec,
+            headers_json: headersJson || null,
+            enabled,
+          }),
+          "创建",
+        );
       }
       await onSaved();
       onClose();

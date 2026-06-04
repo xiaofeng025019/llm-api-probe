@@ -11,11 +11,15 @@ interface Props {
 export function CountUp({ value, duration = 600, decimals = 0, className }: Props) {
   const [display, setDisplay] = useState(value);
   const fromRef = useRef(value);
+  const displayRef = useRef(value);
   const startRef = useRef<number | null>(null);
   const rafRef = useRef<number | null>(null);
 
   useEffect(() => {
-    const from = fromRef.current;
+    // If a new value arrives while animating, start from whatever the user
+    // is currently seeing — not from the original starting value — so the
+    // counter doesn't jump backwards.
+    const from = displayRef.current;
     const to = value;
     if (from === to) return;
     startRef.current = null;
@@ -28,10 +32,12 @@ export function CountUp({ value, duration = 600, decimals = 0, className }: Prop
       const eased = 1 - Math.pow(1 - t, 3);
       const current = from + (to - from) * eased;
       setDisplay(current);
+      displayRef.current = current;
       if (t < 1) {
         rafRef.current = requestAnimationFrame(step);
       } else {
         fromRef.current = to;
+        displayRef.current = to;
       }
     };
     rafRef.current = requestAnimationFrame(step);

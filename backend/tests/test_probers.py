@@ -170,6 +170,74 @@ async def test_openai_probe_chat_429_maps_to_rate_limit() -> None:
 
 @pytest.mark.asyncio
 @respx.mock
+async def test_openai_probe_chat_stream_401_captures_error_body() -> None:
+    """Stream path: 4xx/5xx must be detected before aiter_bytes drains the body
+    and triggers StreamConsumed on the subsequent aread()."""
+    p = make_provider()
+    respx.post("https://api.example.com/v1/chat/completions").mock(
+        return_value=httpx.Response(
+            401, json={"error": {"message": "Incorrect API key"}}
+        )
+    )
+    async with httpx.AsyncClient() as c:
+        out = await OpenAIProber(c).probe_chat(p, "gpt-4o", stream=True)
+    assert not out.success
+    assert out.http_status == 401
+    assert out.error_code == ErrorCode.auth
+    assert out.error_message is not None
+    assert "Incorrect API key" in out.error_message
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_anthropic_probe_chat_stream_500_captures_error_body() -> None:
+    p = make_provider(ProviderKind.anthropic, "https://api.anthropic.com")
+    respx.post("https://api.anthropic.com/v1/messages").mock(
+        return_value=httpx.Response(500, text="internal error")
+    )
+    async with httpx.AsyncClient() as c:
+        out = await AnthropicProber(c).probe_chat(p, "claude-3-haiku", stream=True)
+    assert not out.success
+    assert out.http_status == 500
+    assert out.error_code == ErrorCode.server
+    assert "internal error" in (out.error_message or "")
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_gemini_probe_chat_stream_429_captures_error_body() -> None:
+    p = make_provider(ProviderKind.gemini, "https://generativelanguage.googleapis.com")
+    respx.post(url__regex=r".*googleapis\.com.*").mock(
+        return_value=httpx.Response(429, text="quota")
+    )
+    async with httpx.AsyncClient() as c:
+        out = await GeminiProber(c).probe_chat(p, "gemini-1.5-pro", stream=True)
+    assert not out.success
+    assert out.http_status == 429
+    assert out.error_code == ErrorCode.rate_limit
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_openai_probe_chat_stream_2xx_succeeds() -> None:
+    """Sanity check: success path on stream still works after the early-exit fix."""
+    p = make_provider()
+
+    async def gen():
+        yield b'data: {"choices":[{"delta":{"content":"h"}}]}\n\n'
+        yield b"data: [DONE]\n\n"
+
+    respx.post("https://api.example.com/v1/chat/completions").mock(
+        return_value=httpx.Response(200, stream=gen())
+    )
+    async with httpx.AsyncClient() as c:
+        out = await OpenAIProber(c).probe_chat(p, "gpt-4o", stream=True)
+    assert out.success
+    assert out.http_status == 200
+
+
+@pytest.mark.asyncio
+@respx.mock
 async def test_openai_probe_chat_timeout_maps_to_timeout() -> None:
     p = make_provider()
     respx.post("https://api.example.com/v1/chat/completions").mock(

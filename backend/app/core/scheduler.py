@@ -33,7 +33,6 @@ log = logging.getLogger(__name__)
 _scheduler: AsyncIOScheduler | None = None
 _root_sem: asyncio.Semaphore | None = None
 _provider_sems: dict[int, asyncio.Semaphore] = {}
-_provider_locks: dict[int, asyncio.Lock] = {}
 
 
 def _job_key(provider_id: int, model_id: int | None, target: ProbeTarget) -> str:
@@ -272,17 +271,31 @@ async def sync_all_jobs() -> None:
             sched.remove_job(job.id)
 
 
-async def trigger_now(provider_id: int, model_id: int | None) -> None:
-    """Run a probe right now via APScheduler (lets the scheduler sequence it)."""
+async def trigger_now(provider_id: int, model_id: int | None, session_maker=None) -> bool:
+    """Run a probe right now. Returns True if a probe was actually scheduled,
+    False if the provider/model is disabled (in which case the caller's API
+    endpoint should surface a 409 instead of pretending to schedule)."""
+    sm = session_maker or get_session_maker()
     sched = get_scheduler()
     target = ProbeTarget.list_models if model_id is None else ProbeTarget.chat_completion
+
+    async with sm() as session:
+        provider = await session.get(Provider, provider_id)
+        if provider is None or not provider.enabled:
+            return False
+        if target == ProbeTarget.chat_completion:
+            model = await session.get(Model, model_id) if model_id else None
+            if model is None or not model.enabled:
+                return False
+
     job_id = _make_job_id(provider_id, model_id, target)
     try:
         sched.modify_job(job_id, next_run_time=datetime.now(UTC))
+        return True
     except Exception:
-        # job doesn't exist; run directly. We keep a reference so it isn't GC'd
-        # before completion (best-effort; not awaited).
+        # Job doesn't exist yet (e.g. before any sync_all_jobs). Run inline.
         _background_tasks.add(asyncio.create_task(_run_probe(provider_id, model_id, target)))
+        return True
 
 
 # set of in-flight probe tasks created by trigger_now; lets asyncio.discard them.

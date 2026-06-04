@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState } from "react";
 
 export type ToastKind = "ok" | "fail" | "info";
 
@@ -10,31 +10,28 @@ export interface Toast {
 }
 
 let _id = 0;
-const listeners: Array<(t: Toast) => void> = [];
+const _emitter = new EventTarget();
 
 export function pushToast(kind: ToastKind, title: string, detail?: string) {
   const t: Toast = { id: ++_id, kind, title, detail };
-  for (const l of listeners) l(t);
+  _emitter.dispatchEvent(new CustomEvent<Toast>("toast", { detail: t }));
   return t;
 }
 
 export function ToastHost() {
   const [items, setItems] = useState<Toast[]>([]);
 
-  const onPush = useCallback((t: Toast) => {
-    setItems((cur) => [...cur, t]);
-    setTimeout(() => {
-      setItems((cur) => cur.filter((x) => x.id !== t.id));
-    }, 4500);
-  }, []);
-
   useEffect(() => {
-    listeners.push(onPush);
-    return () => {
-      const i = listeners.indexOf(onPush);
-      if (i >= 0) listeners.splice(i, 1);
+    const onPush = (e: Event) => {
+      const t = (e as CustomEvent<Toast>).detail;
+      setItems((cur) => [...cur, t]);
+      setTimeout(() => {
+        setItems((cur) => cur.filter((x) => x.id !== t.id));
+      }, 4500);
     };
-  }, [onPush]);
+    _emitter.addEventListener("toast", onPush);
+    return () => _emitter.removeEventListener("toast", onPush);
+  }, []);
 
   return (
     <div className="toast-host" role="status" aria-live="polite">

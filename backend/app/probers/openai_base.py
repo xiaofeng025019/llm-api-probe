@@ -136,6 +136,20 @@ class OpenAIBaseProber:
                 json=body,
                 timeout=provider.timeout_seconds,
             ) as resp:
+                # Short-circuit on upstream error: don't drain a stream that has
+                # no terminator (e.g. 401/5xx). Reading via aread() on a
+                # response whose body was already iterated raises StreamConsumed
+                # which would mask the real status with a misleading "other"
+                # error_code.
+                if not (200 <= resp.status_code < 300):
+                    err_text = (await resp.aread()).decode(errors="replace")
+                    return ProbeOutcome(
+                        success=False,
+                        http_status=resp.status_code,
+                        latency_ms=int((time.perf_counter() - t0) * 1000),
+                        error_code=map_status_to_error(resp.status_code),
+                        error_message=err_text[:500] or None,
+                    )
                 first_byte_at: float | None = None
                 async for chunk in resp.aiter_bytes():
                     if not chunk:
@@ -148,14 +162,11 @@ class OpenAIBaseProber:
                 latency = int((time.perf_counter() - t0) * 1000)
                 if first_byte_at is not None:
                     ttfb = int((first_byte_at - t0) * 1000)
-                ok = 200 <= resp.status_code < 300
                 return ProbeOutcome(
-                    success=ok,
+                    success=True,
                     http_status=resp.status_code,
                     latency_ms=latency,
                     ttfb_ms=ttfb,
-                    error_code=None if ok else map_status_to_error(resp.status_code),
-                    error_message=None if ok else (await resp.aread()).decode(errors="replace"),
                 )
         except Exception as e:
             latency = int((time.perf_counter() - t0) * 1000)

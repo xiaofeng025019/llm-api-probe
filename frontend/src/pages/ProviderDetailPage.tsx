@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { api, ModelOut, ProbeResult, Provider } from "../api/types";
+import { withErrorToast } from "../lib/action";
 import {
   formatMs,
   formatRelative,
@@ -157,14 +158,18 @@ export function ProviderDetailPage() {
             <button
               className="secondary"
               onClick={async () => {
-                await api.syncModels(providerId);
-                await refresh();
+                try {
+                  await withErrorToast(api.syncModels(providerId), "同步模型");
+                  await refresh();
+                } catch {
+                  /* toast already shown */
+                }
               }}
             >
               <IconRefresh />
               同步模型
             </button>
-            <button onClick={() => api.runNow(providerId).then(refresh)}>
+            <button onClick={() => withErrorToast(api.runNow(providerId), "立即检测").then(refresh)}>
               <IconPlay />
               立即检测
             </button>
@@ -311,9 +316,10 @@ export function ProviderDetailPage() {
                         type="checkbox"
                         checked={m.enabled}
                         onChange={() =>
-                          api
-                            .patchModel(m.id, { enabled: !m.enabled })
-                            .then(refresh)
+                          withErrorToast(
+                            api.patchModel(m.id, { enabled: !m.enabled }),
+                            "切换 enabled",
+                          ).then(refresh)
                         }
                         aria-label={`Enable ${m.model_id}`}
                       />
@@ -330,7 +336,9 @@ export function ProviderDetailPage() {
                   <td>
                     <button
                       className="secondary sm"
-                      onClick={() => api.probeNow(providerId, m.id).then(refresh)}
+                      onClick={() =>
+                        withErrorToast(api.probeNow(providerId, m.id), "Probe").then(refresh)
+                      }
                       aria-label={`单独探测 ${m.model_id}`}
                     >
                       <IconProbe />

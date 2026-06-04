@@ -137,6 +137,15 @@ class GeminiProber:
                 json=body,
                 timeout=provider.timeout_seconds,
             ) as resp:
+                if not (200 <= resp.status_code < 300):
+                    err_text = (await resp.aread()).decode(errors="replace")
+                    return ProbeOutcome(
+                        success=False,
+                        http_status=resp.status_code,
+                        latency_ms=int((time.perf_counter() - t0) * 1000),
+                        error_code=map_status_to_error(resp.status_code),
+                        error_message=err_text[:500] or None,
+                    )
                 first_byte_at: float | None = None
                 async for chunk in resp.aiter_bytes():
                     if not chunk:
@@ -148,14 +157,11 @@ class GeminiProber:
                 latency = int((time.perf_counter() - t0) * 1000)
                 if first_byte_at is not None:
                     ttfb = int((first_byte_at - t0) * 1000)
-                ok = 200 <= resp.status_code < 300
                 return ProbeOutcome(
-                    success=ok,
+                    success=True,
                     http_status=resp.status_code,
                     latency_ms=latency,
                     ttfb_ms=ttfb,
-                    error_code=None if ok else map_status_to_error(resp.status_code),
-                    error_message=None if ok else (await resp.aread()).decode(errors="replace")[:500],
                 )
         except Exception as e:
             latency = int((time.perf_counter() - t0) * 1000)
