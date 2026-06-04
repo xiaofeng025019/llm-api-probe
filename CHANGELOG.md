@@ -1,5 +1,33 @@
 # Changelog
 
+## 2026-06-04 (Phase 2)
+
+### ✨ Added
+- **UUID external IDs**: Provider / Model / ProbeResult expose `uuid_id` as stable external-facing ID; internal `id` (integer) remains for FK joins. All API endpoints accept/return UUIDs.
+- **Soft-delete**: `deleted_at` column on Provider and Model; `DELETE /providers/{id}` sets timestamp instead of row delete. All queries filter by `deleted_at IS NULL`.
+- **Snapshot fields on ProbeResult**: `provider_name_at_probe` / `model_id_at_probe` capture state at probe time for historical integrity.
+- **Partial unique index**: `ix_providers_name_active` (sqlite_where: `deleted_at IS NULL`) replaces the global unique constraint on `providers.name`, allowing same-name creation after soft-delete.
+- **Import restores soft-deleted providers**: import endpoint detects soft-deleted rows and restores them directly.
+- **set_favorites handles soft-deleted models**: restores soft-deleted models and re-marks as favorite.
+- **3 Alembic migrations**: `0158e57e3489` (uuid + snapshot + soft-delete columns), `7ad1aec504b8` (partial unique index).
+
+### 🔧 Changed
+- **API params migrated from `int` to `uuid.UUID`**: all provider_id / model_id query params and path params.
+- **Pydantic schemas use validation_alias / serialization_alias**: `uuid_id → id`, `provider_uuid → provider_id`, `model_uuid → model_id`.
+- **ProbeResult gains `provider_rel` relationship + `provider_uuid` / `model_uuid` properties** for API serialization.
+- **Dashboard excludes soft-deleted providers and models**.
+- **Scheduler excludes soft-deleted data** from job sync and probe runs.
+
+### 🐛 Fixed
+- **Import with soft-deleted provider**: previously `patch_provider()` couldn't reach soft-deleted rows (filtered by `include_deleted=False`); now restored directly in import handler.
+- **`Provider.name` unique constraint blocked recreation after soft-delete**: replaced with partial unique index.
+- **`test_services.py` used `p.id` (int) as `provider_id` in `list_results`**: UUID filter silently returned empty; fixed to `p.uuid_id`.
+
+### 📊 Test coverage
+- **67** backend tests (pytest)
+
+---
+
 ## 2026-06-04
 
 ### ✨ Added
@@ -34,7 +62,7 @@
 - **All user actions now have error toast feedback** via `withErrorToast()` helper.
 
 ### 📊 Test coverage
-- **62** backend tests (pytest)
+- **62** backend tests (pytest) → later upgraded to 67
 - **14/14** e2e smoke steps
 - mypy strict (31 files, 0 errors)
 - ruff clean (check + format)

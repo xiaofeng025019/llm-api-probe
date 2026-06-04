@@ -5,7 +5,7 @@
 > **设计稿**：[`docs/superpowers/specs/2026-06-03-llm-usability-design.md`](docs/superpowers/specs/2026-06-03-llm-usability-design.md)
 > **数据库迁移**：[`docs/superpowers/db-migrations.md`](docs/superpowers/db-migrations.md)
 >
-> **状态**：MVP — 后端 62 测试通过，前端 4 页面可运行，Docker 化 + Alembic 已就绪。
+> **状态**：MVP — 后端 67 测试通过，前端 4 页面可运行，Docker 化 + Alembic 已就绪。
 
 ## 特性
 
@@ -15,6 +15,9 @@
 - 收藏模型单独高亮
 - 24h / 7d / 30d 趋势图（recharts）
 - 导入 / 导出 JSON 配置（含 key + favorites 收藏列表）
+- 软删除 Provider / Model（删除后可同名重建，导入可恢复）
+- 探测结果快照字段（provider_name_at_probe / model_id_at_probe），历史数据不随主表变更失真
+- UUID 外部 ID（API 全部使用 UUID，内部仍用整数 FK 保证性能）
 - SSE 实时事件流（probe.completed / provider.updated / model.updated / job.error）
 - 本地单进程单 SQLite，无外部依赖
 
@@ -75,7 +78,7 @@ cd frontend && pnpm dev   # http://localhost:5173，/api 自动代理到 :8000
 
 ```bash
 cd backend
-uv run pytest            # 62 tests
+uv run pytest            # 67 tests
 uv run ruff check app    # lint
 uv run ruff format --check app
 uv run mypy app

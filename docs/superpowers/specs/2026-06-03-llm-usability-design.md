@@ -74,8 +74,9 @@
 
 ```python
 class Provider(Base):
-    id: int (pk)
-    name: str (unique, 用户可读名)
+    id: int (pk)                                       # 内部 FK 引用
+    uuid_id: UUID (unique, indexed)                    # 外部 API 暴露 ID
+    name: str (partial unique, 仅活跃行唯一)           # sqlite_where: deleted_at IS NULL
     kind: enum { openai | openai_compat | anthropic | gemini }
     base_url: str
     api_key: str                                       # 明文（已确认）
@@ -85,9 +86,11 @@ class Provider(Base):
     timeout_seconds: int                               # 默认 30
     headers_json: str                                  # 自定义 header, JSON 字符串
     created_at, updated_at
+    deleted_at: datetime | null                        # 软删除标记
 
 class Model(Base):
-    id: int (pk)
+    id: int (pk)                                       # 内部 FK 引用
+    uuid_id: UUID (unique, indexed)                    # 外部 API 暴露 ID
     provider_id: int (fk -> providers)
     model_id: str                                      # 上游 id
     display_name: str | null
@@ -95,9 +98,11 @@ class Model(Base):
     enabled: bool
     is_favorite: bool
     last_seen_at: datetime                             # 用于清理下线
+    deleted_at: datetime | null                        # 软删除标记
 
 class ProbeResult(Base):
-    id: int (pk)
+    id: int (pk)                                       # 内部 FK 引用
+    uuid_id: UUID (unique, indexed)                    # 外部 API 暴露 ID
     provider_id: int (fk)
     model_id: int (fk, nullable)                       # list_models 时为 null
     target: enum { list_models | chat_completion }
@@ -108,6 +113,8 @@ class ProbeResult(Base):
     error_code: enum | null { auth | rate_limit | timeout | server | network | other }
     error_message: str | null
     checked_at: datetime (indexed)
+    provider_name_at_probe: str                        # 快照：探测时的 provider 名称
+    model_id_at_probe: str | null                     # 快照：探测时的 model_id 字符串
 
 class Setting(Base):
     key: str (pk)

@@ -109,10 +109,12 @@ uv run alembic downgrade base  # 回到起点（删所有表）
 
 | Revision | 日期 | 说明 |
 |---|---|---|
+| `7ad1aec504b8` | 2026-06-04 | providers.name 改为部分唯一索引（sqlite_where: deleted_at IS NULL） |
+| `0158e57e3489` | 2026-06-04 | 添加 uuid_id、deleted_at、快照字段列 |
 | `6fe570e1adbe` | 2026-06-04 | probe_results.checked_at server_default 改为 UTC CURRENT_TIMESTAMP |
 | `4a7be4f2d8b0` | 2026-06-04 | 初始 schema（5 张表 + 4 个索引） |
 
-当前 HEAD = `6fe570e1adbe`。
+当前 HEAD = `7ad1aec504b8`。
 
 ### 命令
 
