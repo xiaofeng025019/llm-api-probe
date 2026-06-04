@@ -299,6 +299,72 @@ async def test_dashboard_available_models_counts_recent_per_model(session) -> No
 
 
 @pytest.mark.asyncio
+async def test_dashboard_includes_favorite_model_status_details(session) -> None:
+    p = await providers_svc.create_provider(
+        session,
+        ProviderCreate(name="p1", kind=ProviderKind.openai, base_url="https://x", api_key="k"),
+    )
+    fav, other = await models_svc.upsert_discovered(
+        session,
+        p.id,
+        [
+            DiscoveredModel(model_id="gpt-4o"),
+            DiscoveredModel(model_id="gpt-4o-mini"),
+        ],
+    )
+    fav.is_favorite = True
+    await session.commit()
+
+    base_now = datetime.now(UTC).replace(tzinfo=None)
+    session.add(
+        ProbeResult(
+            provider_id=p.id,
+            model_id=fav.id,
+            target=ProbeTarget.chat_completion,
+            success=False,
+            http_status=500,
+            latency_ms=220,
+            ttfb_ms=70,
+            error_code=ErrorCode.server,
+            error_message="server failed",
+            checked_at=base_now,
+        )
+    )
+    session.add(
+        ProbeResult(
+            provider_id=p.id,
+            model_id=fav.id,
+            target=ProbeTarget.chat_completion,
+            success=True,
+            http_status=200,
+            latency_ms=120,
+            ttfb_ms=40,
+            checked_at=base_now + timedelta(seconds=1),
+        )
+    )
+    session.add(
+        ProbeResult(
+            provider_id=p.id,
+            model_id=other.id,
+            target=ProbeTarget.chat_completion,
+            success=True,
+            latency_ms=50,
+            checked_at=base_now + timedelta(seconds=2),
+        )
+    )
+    await session.commit()
+
+    dash = await results_svc.dashboard(session)
+    favorite_models = dash.providers[0].favorite_models
+    assert len(favorite_models) == 1
+    assert favorite_models[0].model_id == "gpt-4o"
+    assert favorite_models[0].status == "ok"
+    assert favorite_models[0].latency_ms == 120
+    assert favorite_models[0].ttfb_ms == 40
+    assert favorite_models[0].availability_24h == 50
+
+
+@pytest.mark.asyncio
 async def test_dashboard_favorites_delta_24h_ago(session) -> None:
     """favorites_online_24h_ago is 'how many favorites were online at
     the time the 24h window started', so a model that's been up the

@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import Model, ProbeResult, ProbeTarget, Provider
 from app.probers.types import ProbeOutcome
-from app.schemas.api import DashboardOut, DashboardProvider
+from app.schemas.api import DashboardFavoriteModel, DashboardOut, DashboardProvider
 
 
 async def record_outcome(
@@ -75,6 +75,7 @@ async def dashboard(session: AsyncSession) -> DashboardOut:
     # per model_id. Done in Python instead of a window function so it works
     # on every SQLite version without ROW_NUMBER().
     recent_per_model: dict[int, bool] = {}
+    recent_counts_by_model: dict[int, tuple[int, int]] = {}
     rows = (
         await session.execute(
             select(ProbeResult.model_id, ProbeResult.success, ProbeResult.checked_at)
@@ -83,9 +84,29 @@ async def dashboard(session: AsyncSession) -> DashboardOut:
         )
     ).all()
     for model_id, success, _ in rows:
-        if model_id is None or model_id in recent_per_model:
+        if model_id is None:
             continue
-        recent_per_model[model_id] = bool(success)
+        total, succeeded = recent_counts_by_model.get(model_id, (0, 0))
+        recent_counts_by_model[model_id] = (total + 1, succeeded + (1 if success else 0))
+        if model_id not in recent_per_model:
+            recent_per_model[model_id] = bool(success)
+
+    latest_by_model: dict[int, ProbeResult] = {}
+    latest_rows = (
+        (
+            await session.execute(
+                select(ProbeResult)
+                .where(ProbeResult.model_id.is_not(None))
+                .order_by(ProbeResult.checked_at.desc())
+            )
+        )
+        .scalars()
+        .all()
+    )
+    for row in latest_rows:
+        if row.model_id is None or row.model_id in latest_by_model:
+            continue
+        latest_by_model[row.model_id] = row
 
     # Pre-24h snapshot for the Favorite Models delta: which favorites
     # were online (latest success) at the time the 24h window started?
@@ -148,6 +169,27 @@ async def dashboard(session: AsyncSession) -> DashboardOut:
         # any successful probe in the window, which double-counted
         # a model that flipped from success → failure.
         online = sum(1 for m in favorites if recent_per_model.get(m.id)) if favorites else 0
+        favorite_models = []
+        for m in favorites:
+            latest = latest_by_model.get(m.id)
+            recent_total, recent_success = recent_counts_by_model.get(m.id, (0, 0))
+            availability_24h = round(recent_success / recent_total * 100, 2) if recent_total > 0 else None
+            favorite_models.append(
+                DashboardFavoriteModel(
+                    id=m.id,
+                    model_id=m.model_id,
+                    display_name=m.display_name,
+                    type=m.type,
+                    enabled=m.enabled,
+                    status=("ok" if latest and latest.success else "fail" if latest else None),
+                    last_checked_at=latest.checked_at if latest else None,
+                    latency_ms=latest.latency_ms if latest else None,
+                    ttfb_ms=latest.ttfb_ms if latest else None,
+                    error_code=latest.error_code if latest else None,
+                    error_message=latest.error_message if latest else None,
+                    availability_24h=availability_24h,
+                )
+            )
 
         out.append(
             DashboardProvider(
@@ -162,6 +204,7 @@ async def dashboard(session: AsyncSession) -> DashboardOut:
                 avg_latency_ms_24h=avg_lat_ms,
                 favorite_models_online=online,
                 favorite_models_total=len(favorites),
+                favorite_models=favorite_models,
             )
         )
         totals["providers"] += 1

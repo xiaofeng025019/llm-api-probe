@@ -162,6 +162,8 @@ async def test_settings_round_trip(api_client: httpx.AsyncClient) -> None:
 
 @pytest.mark.asyncio
 async def test_import_export_roundtrip(api_client: httpx.AsyncClient) -> None:
+    """Basic shape: create → export → re-import → still 1 provider,
+    api_key is always carried (no more ?include_keys opt-out)."""
     payload = {
         "name": "p1",
         "kind": "openai_compat",
@@ -173,12 +175,11 @@ async def test_import_export_roundtrip(api_client: httpx.AsyncClient) -> None:
     r = await api_client.post("/api/v1/export")
     body = r.json()["data"]
     assert any(p["name"] == "p1" for p in body["providers"])
-    assert "api_key" not in body["providers"][0]  # not included by default
-
-    r = await api_client.post("/api/v1/export?include_keys=true")
-    body = r.json()["data"]
+    # api_key is always included.
     assert body["providers"][0]["api_key"] == "k1"
 
+    # Re-import with a different api_key: existing provider gets
+    # updated (api_key is now always overwritten on import).
     r = await api_client.post(
         "/api/v1/import",
         json={
@@ -195,27 +196,8 @@ async def test_import_export_roundtrip(api_client: httpx.AsyncClient) -> None:
     )
     assert r.status_code == 200
     assert r.json()["data"]["providers_updated"] == 1
-    # include_keys=false default -> no api_key in export payload at all
-    r = await api_client.post("/api/v1/export")
-    assert "api_key" not in r.json()["data"]["providers"][0]
-    # Verify DB still has k1
-    r = await api_client.post("/api/v1/export?include_keys=true")
-    assert r.json()["data"]["providers"][0]["api_key"] == "k1"
 
-    r = await api_client.post(
-        "/api/v1/import?include_keys=true",
-        json={
-            "providers": [
-                {
-                    "name": "p1",
-                    "kind": "openai_compat",
-                    "base_url": "https://api.deepseek.com",
-                    "api_key": "k2",
-                }
-            ]
-        },
-    )
-    r = await api_client.post("/api/v1/export?include_keys=true")
+    r = await api_client.post("/api/v1/export")
     assert r.json()["data"]["providers"][0]["api_key"] == "k2"
 
 

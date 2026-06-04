@@ -67,7 +67,6 @@ async def put_settings(body: SettingPut, session: AsyncSession = Depends(get_ses
 @router.post("/import", response_model=ApiResponse)
 async def import_(
     body: ImportPayload,
-    include_keys: bool = Query(default=False),
     session: AsyncSession = Depends(get_session),
 ) -> ApiResponse:
     created = 0
@@ -78,15 +77,10 @@ async def import_(
         existing_p = existing.get(spec.name)
         if existing_p is None:
             if not spec.api_key:
-                # A brand-new provider must have a key. Secrets-less
-                # exports are intended to update existing providers, not
-                # to seed brand-new ones.
+                # A brand-new provider must have a key.
                 raise HTTPException(
                     status_code=400,
-                    detail=(
-                        f"provider {spec.name!r} is new; an api_key is required. "
-                        "Re-export with ?include_keys=true or add the key manually."
-                    ),
+                    detail=(f"provider {spec.name!r} is new; an api_key is required."),
                 )
             await providers_svc.create_provider(session, spec)
             created += 1
@@ -98,9 +92,8 @@ async def import_(
                 "proxy": spec.proxy,
                 "headers_json": spec.headers_json,
                 "enabled": spec.enabled,
+                "api_key": spec.api_key,
             }
-            if include_keys:
-                patch_data["api_key"] = spec.api_key
             await providers_svc.patch_provider(session, existing_p.id, ProviderPatch(**patch_data))
             updated += 1
     if body.settings:
@@ -133,10 +126,7 @@ async def import_(
 
 
 @router.post("/export", response_model=ApiResponse)
-async def export_(
-    include_keys: bool = Query(default=False),
-    session: AsyncSession = Depends(get_session),
-) -> ApiResponse:
+async def export_(session: AsyncSession = Depends(get_session)) -> ApiResponse:
     providers = await providers_svc.list_providers(session)
     settings = await settings_svc.list_settings(session)
     # Collect favorite model_ids per provider name so the import side
@@ -154,13 +144,9 @@ async def export_(
                 "name": p.name,
                 "kind": p.kind.value,
                 "base_url": p.base_url,
-                # api_key is included only when the caller passes
-                # ?include_keys=true. Without it, the export is a
-                # shareable config without secrets. The import endpoint
-                # only writes api_key onto an EXISTING provider when
-                # ?include_keys=true is also passed, so a secrets-less
-                # export can be re-imported without overwriting keys.
-                **({"api_key": p.api_key} if include_keys else {}),
+                # api_key is always included so the import roundtrip
+                # works for brand-new providers too.
+                "api_key": p.api_key,
                 "proxy": p.proxy,
                 "enabled": p.enabled,
                 "interval_seconds": p.interval_seconds,

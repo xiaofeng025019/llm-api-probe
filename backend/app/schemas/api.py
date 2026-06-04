@@ -110,6 +110,21 @@ class ProbeResultOut(BaseModel):
     checked_at: datetime
 
 
+class DashboardFavoriteModel(BaseModel):
+    id: int
+    model_id: str
+    display_name: str | None
+    type: ModelType
+    enabled: bool
+    status: str | None
+    last_checked_at: datetime | None
+    latency_ms: int | None
+    ttfb_ms: int | None
+    error_code: ErrorCode | None
+    error_message: str | None
+    availability_24h: float | None
+
+
 class DashboardProvider(BaseModel):
     provider_id: int
     name: str
@@ -122,6 +137,7 @@ class DashboardProvider(BaseModel):
     avg_latency_ms_24h: int | None
     favorite_models_online: int
     favorite_models_total: int
+    favorite_models: list[DashboardFavoriteModel] = Field(default_factory=list)
 
 
 class DashboardOut(BaseModel):
