@@ -72,10 +72,22 @@ async def import_(
 ) -> ApiResponse:
     created = 0
     updated = 0
+    favorites_restored = 0
     existing = {p.name: p for p in await providers_svc.list_providers(session)}
     for spec in body.providers:
         existing_p = existing.get(spec.name)
         if existing_p is None:
+            if not spec.api_key:
+                # A brand-new provider must have a key. Secrets-less
+                # exports are intended to update existing providers, not
+                # to seed brand-new ones.
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"provider {spec.name!r} is new; an api_key is required. "
+                        "Re-export with ?include_keys=true or add the key manually."
+                    ),
+                )
             await providers_svc.create_provider(session, spec)
             created += 1
         else:
@@ -93,8 +105,31 @@ async def import_(
             updated += 1
     if body.settings:
         await settings_svc.upsert_settings(session, body.settings)
+
+    # Restore favorites AFTER providers exist (so we can look them up
+    # by name). set_favorites handles the case where a model row
+    # doesn't yet exist on this DB (e.g. fresh import before any
+    # /v1/models sync) by creating a placeholder row.
+    if body.favorites_by_provider:
+        existing = {p.name: p for p in await providers_svc.list_providers(session)}
+        for prov_name, model_ids in body.favorites_by_provider.items():
+            prov = existing.get(prov_name)
+            if prov is None:
+                # Provider declared in favorites but not in providers list
+                # — skip silently. The user gets a 0 in the
+                # favorites_restored count and the export's `providers`
+                # field is the source of truth.
+                continue
+            favorites_restored += await models_svc.set_favorites(session, prov.id, model_ids)
+
     await sync_all_jobs()
-    return ApiResponse(data={"providers_created": created, "providers_updated": updated})
+    return ApiResponse(
+        data={
+            "providers_created": created,
+            "providers_updated": updated,
+            "favorites_restored": favorites_restored,
+        }
+    )
 
 
 @router.post("/export", response_model=ApiResponse)
@@ -104,12 +139,27 @@ async def export_(
 ) -> ApiResponse:
     providers = await providers_svc.list_providers(session)
     settings = await settings_svc.list_settings(session)
+    # Collect favorite model_ids per provider name so the import side
+    # can restore is_favorite on the right model. Keyed by name (not
+    # id) because the import creates new providers and only knows
+    # names at that point.
+    favorites_by_provider: dict[str, list[str]] = {}
+    for p in providers:
+        favs = [m.model_id for m in await models_svc.list_models(session, p.id) if m.is_favorite]
+        if favs:
+            favorites_by_provider[p.name] = favs
     payload = ExportPayload(
         providers=[
             {
                 "name": p.name,
                 "kind": p.kind.value,
                 "base_url": p.base_url,
+                # api_key is included only when the caller passes
+                # ?include_keys=true. Without it, the export is a
+                # shareable config without secrets. The import endpoint
+                # only writes api_key onto an EXISTING provider when
+                # ?include_keys=true is also passed, so a secrets-less
+                # export can be re-imported without overwriting keys.
                 **({"api_key": p.api_key} if include_keys else {}),
                 "proxy": p.proxy,
                 "enabled": p.enabled,
@@ -119,6 +169,7 @@ async def export_(
             }
             for p in providers
         ],
+        favorites_by_provider=favorites_by_provider,
         settings={s.key: s.value for s in settings},
     )
     return ApiResponse(data=payload.model_dump())

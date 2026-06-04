@@ -34,6 +34,59 @@ async def patch_model(session: AsyncSession, model_id: int, data: ModelPatch) ->
     return m
 
 
+async def set_favorites(session: AsyncSession, provider_id: int, model_ids: list[str]) -> int:
+    """Replace the favorite set for one provider. Any existing favorite
+    not in model_ids is cleared, every model_id in the list is set
+    favorite.
+
+    If a model_id is not yet in the models table (e.g. a freshly
+    imported provider that hasn't had /v1/models synced yet), we
+    create a placeholder row with the default type so the favorite
+    can be restored. The probe pipeline will overwrite the placeholder
+    fields (type, display_name, last_seen_at) on the next sync.
+    Returns the number of rows actually changed (set or cleared)."""
+    desired = set(model_ids)
+    changed = 0
+    # Ensure every desired model_id has a row.
+    for mid in desired:
+        existing_row = await session.scalar(
+            select(Model).where(Model.provider_id == provider_id, Model.model_id == mid)
+        )
+        if existing_row is None:
+            session.add(
+                Model(
+                    provider_id=provider_id,
+                    model_id=mid,
+                    type=ModelType.chat,  # placeholder; sync will fix
+                    enabled=True,
+                    is_favorite=True,
+                )
+            )
+            changed += 1
+    await session.flush()
+    # Now re-read to get the merged set (existing + new placeholders)
+    # with stable ORM identity.
+    all_models = list(
+        (await session.execute(select(Model).where(Model.provider_id == provider_id))).scalars().all()
+    )
+    for m in all_models:
+        want = m.model_id in desired
+        if want and not m.is_favorite:
+            m.is_favorite = True
+            changed += 1
+        elif not want and m.is_favorite:
+            m.is_favorite = False
+            changed += 1
+    await session.commit()
+    # Return the total number of favorites after this call (capped at
+    # the requested size), so callers can report 'favorites_restored'
+    # even when the rows already had the right state. The +1 for new
+    # placeholder rows above is already counted in 'changed' but only
+    # reflects inserts — here we want the user-facing 'how many are
+    # now favorited' number.
+    return sum(1 for m in all_models if m.is_favorite)
+
+
 async def upsert_discovered(
     session: AsyncSession, provider_id: int, discovered: list[DiscoveredModel]
 ) -> list[Model]:

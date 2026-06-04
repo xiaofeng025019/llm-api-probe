@@ -35,7 +35,10 @@ class ProviderCreate(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     kind: ProviderKind
     base_url: str = Field(min_length=1, max_length=500)
-    api_key: str = Field(min_length=1, max_length=500)
+    # Optional on import: a secrets-less export can re-import without
+    # overwriting keys on an existing provider. New providers still
+    # need this — the import endpoint validates it before insert.
+    api_key: str | None = Field(default=None, min_length=1, max_length=500)
     proxy: str | None = None
     enabled: bool = True
     interval_seconds: int = Field(default=300, ge=10, le=86400)
@@ -146,8 +149,17 @@ class SettingPut(BaseModel):
 class ImportPayload(BaseModel):
     providers: list[ProviderCreate] = Field(default_factory=list)
     settings: dict[str, str] = Field(default_factory=dict)
+    # provider name (case-sensitive match against the providers above)
+    # → list of model_id strings to mark as is_favorite on import. New
+    # providers are imported first; favorite restoration happens after
+    # so model lookups don't race.
+    favorites_by_provider: dict[str, list[str]] = Field(default_factory=dict)
 
 
 class ExportPayload(BaseModel):
     providers: list[dict[str, Any]]
+    # Same shape as ImportPayload.favorites_by_provider: a flat map
+    # so the export is self-describing and older clients (without
+    # favorite support) can still load it.
+    favorites_by_provider: dict[str, list[str]] = Field(default_factory=dict)
     settings: dict[str, str]

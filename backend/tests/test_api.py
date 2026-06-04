@@ -219,6 +219,90 @@ async def test_import_export_roundtrip(api_client: httpx.AsyncClient) -> None:
     assert r.json()["data"]["providers"][0]["api_key"] == "k2"
 
 
+@pytest.mark.asyncio
+async def test_export_includes_favorites(api_client: httpx.AsyncClient) -> None:
+    """Exported payload should include a favorites_by_provider map
+    that mirrors which model_ids are is_favorite=True on each provider."""
+    # Seed: one provider with two models, one of them a favorite.
+    await api_client.post(
+        "/api/v1/providers",
+        json={
+            "name": "fav-test",
+            "kind": "openai",
+            "base_url": "https://api.openai.com",
+            "api_key": "k",
+        },
+    )
+    with respx.mock:
+        respx.get("https://api.openai.com/v1/models").mock(
+            return_value=httpx.Response(
+                200,
+                json={"data": [{"id": "gpt-4o"}, {"id": "gpt-4o-mini"}]},
+            )
+        )
+        await api_client.post("/api/v1/providers/1/sync-models")
+    r = await api_client.get("/api/v1/providers/1/models")
+    models = r.json()["data"]
+    fav = next(m for m in models if m["model_id"] == "gpt-4o")
+    await api_client.patch(f"/api/v1/models/{fav['id']}", json={"is_favorite": True})
+
+    # Export and check the favorites map.
+    r = await api_client.post("/api/v1/export")
+    body = r.json()["data"]
+    assert body["favorites_by_provider"] == {"fav-test": ["gpt-4o"]}
+
+
+@pytest.mark.asyncio
+async def test_import_restores_favorites(api_client: httpx.AsyncClient) -> None:
+    """Re-importing an export that contains favorites should re-set
+    is_favorite on the named provider's models, but only after that
+    provider has had its model list synced (otherwise the favorite
+    model_id can't be matched to a row)."""
+    # Seed one provider with two models; export with fav on 'gpt-4o'.
+    await api_client.post(
+        "/api/v1/providers",
+        json={"name": "p", "kind": "openai", "base_url": "https://x", "api_key": "k"},
+    )
+    with respx.mock:
+        respx.get("https://x/v1/models").mock(
+            return_value=httpx.Response(200, json={"data": [{"id": "gpt-4o"}, {"id": "gpt-4o-mini"}]})
+        )
+        await api_client.post("/api/v1/providers/1/sync-models")
+    r = await api_client.get("/api/v1/providers/1/models")
+    fav = next(m for m in r.json()["data"] if m["model_id"] == "gpt-4o")
+    await api_client.patch(f"/api/v1/models/{fav['id']}", json={"is_favorite": True})
+
+    exported = (await api_client.post("/api/v1/export")).json()["data"]
+    assert exported["favorites_by_provider"] == {"p": ["gpt-4o"]}
+
+    # Wipe, re-create, re-sync models (so set_favorites has rows to
+    # target), then import.
+    await api_client.delete("/api/v1/providers/1")
+    await api_client.post(
+        "/api/v1/providers",
+        json={"name": "p", "kind": "openai", "base_url": "https://x", "api_key": "k"},
+    )
+    with respx.mock:
+        respx.get("https://x/v1/models").mock(
+            return_value=httpx.Response(200, json={"data": [{"id": "gpt-4o"}, {"id": "gpt-4o-mini"}]})
+        )
+        await api_client.post("/api/v1/providers/2/sync-models")
+
+    r = await api_client.post("/api/v1/import", json=exported)
+    assert r.status_code == 200
+    body = r.json()["data"]
+    assert body["providers_updated"] == 1
+    assert body["favorites_restored"] >= 1
+
+    # The favorite is back. Locate the provider by name since SQLite
+    # recycles rowids after DELETE.
+    r = await api_client.get("/api/v1/providers")
+    prov_id = next(p["id"] for p in r.json()["data"] if p["name"] == "p")
+    r = await api_client.get(f"/api/v1/providers/{prov_id}/models")
+    favorites = {m["model_id"]: m["is_favorite"] for m in r.json()["data"]}
+    assert favorites.get("gpt-4o") is True
+
+
 # ---------- dashboard + probe.run ------------------------------------------
 
 
