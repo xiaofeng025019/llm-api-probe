@@ -96,6 +96,33 @@ uv run alembic upgrade head          # 再应用
 # 提交 app/db/models.py + alembic/versions/<rev>_*.py
 ```
 
+## 端到端冒烟测试 + 测试数据清理
+
+`scripts/e2e_smoke.sh` 用临时 SQLite 跑全套 13 个 API 验证，跑完自动清理 — 不要再用
+`curl` 直接对真实 `data/llm_usability.db` 测，避免污染用户数据。
+
+```bash
+cd backend
+bash scripts/e2e_smoke.sh    # 或: make e2e（如果加了 Makefile）
+```
+
+如果手贱写了 `t` / `demo` / `sk-test` 之类的测试数据到 DB：
+
+```bash
+cd backend
+uv run python -m app.cli list-providers           # 列出全部
+uv run python -m app.cli cleanup-test-data        # 干跑：列出可疑条目，不删
+uv run python -m app.cli cleanup-test-data --yes  # 真的删
+```
+
+判定规则（`app/cli.py` 里的 `_looks_like_test_data`）：
+- 名字 ∈ {`t`, `test`, `demo`, `smoke`, `example`, `tmp`, `temp`, `x`}（大小写不敏感）
+- 或以 `test-` / `tmp-` 开头
+- key ∈ {`sk-test`, `sk-fake`, `k`, `test`, `demo`, `xxx`}
+- 或以 `sk-test` / `sk-fake` 开头
+
+启动时如果 DB 里有可疑条目，lifespan 会在日志里打 warning 提示。
+
 服务启动时 `lifespan` 自动 `alembic upgrade head`，无需手动跑。
 
 ## API 概览

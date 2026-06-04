@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -22,6 +23,8 @@ from app.core.scheduler import (
 )
 from app.db import init_db
 from app.db.session import get_session_maker
+
+log = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -43,6 +46,25 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     if not sched.running:
         sched.start()
     await sync_all_jobs()
+
+    # If the database already has obvious test-data providers (from prior
+    # manual curl-ing or scratch work), surface a one-line warning at boot so
+    # the user can clean them up with `uv run python -m app.cli cleanup-test-data`.
+    with contextlib.suppress(Exception):
+        from sqlalchemy import select
+
+        from app.cli import _looks_like_test_data
+        from app.db.models import Provider
+
+        async with sm() as session:
+            rows = list((await session.execute(select(Provider))).scalars().all())
+        suspects = [p for p in rows if _looks_like_test_data(p.name, p.api_key)]
+        if suspects:
+            log.warning(
+                "found %d likely test-data provider(s); run "
+                "`uv run python -m app.cli cleanup-test-data` to inspect/remove",
+                len(suspects),
+            )
     yield
     # Shutdown order matters:
     # 1) Stop accepting new job firings and wait for in-flight probes to
@@ -98,22 +120,22 @@ class SPAStaticFiles(StaticFiles):
         # for /api/* reaches this mount it means there is no matching route —
         # surface a real 404 instead of the SPA index.
         if path.startswith("api/") or path.startswith("/api/"):
-            from starlette.exceptions import HTTPException
+            raise StarletteHTTPException(status_code=404, detail="not found")
+        # Try the real static file first. If it exists, return it.
+        # If not, decide between a real 404 (asset) and SPA fallback (route):
+        #   - has an extension AND isn't just "index.html" → 404 (asset missing)
+        #   - no extension (or "index.html" for "/") → serve SPA shell
+        from pathlib import PurePosixPath
 
-            raise HTTPException(status_code=404, detail="not found")
-        # If the URL has a file extension (e.g. .js, .css, .png), the browser
-        # expects that exact asset. Fallback would return 200 text/html for a
-        # missing JS file and the app would silently break with no status-code
-        # hint. Only return index.html for extension-less paths.
-        if "." in path.rsplit("/", 1)[-1]:
-            from starlette.exceptions import HTTPException
-
-            raise HTTPException(status_code=404, detail="not found")
         try:
             return await super().get_response(path, scope)
         except StarletteHTTPException as exc:
             if exc.status_code != 404:
                 raise
+            name = PurePosixPath(path).name
+            if "." in name and name != "index.html":
+                # Missing asset: 404, don't fall back to HTML
+                raise StarletteHTTPException(status_code=404, detail="not found") from None
             return FileResponse(self.index_path, media_type="text/html")
 
 
