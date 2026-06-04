@@ -188,6 +188,109 @@ async def test_record_outcome_persists(session) -> None:
 
 
 @pytest.mark.asyncio
+async def test_record_outcome_updates_confirmed_model_status(session) -> None:
+    p = await providers_svc.create_provider(
+        session,
+        ProviderCreate(
+            name="p1",
+            kind=ProviderKind.openai,
+            base_url="https://api.openai.com",
+            api_key="k",
+        ),
+    )
+    fav = (
+        await models_svc.upsert_discovered(
+            session, p.id, [DiscoveredModel(model_id="gpt-4o", type=ModelType.chat)]
+        )
+    )[0]
+    fav.is_favorite = True
+    await session.commit()
+
+    await results_svc.record_outcome(
+        session,
+        p,
+        fav.id,
+        ProbeTarget.chat_completion,
+        ProbeOutcome(success=False, http_status=500, latency_ms=100, error_code=ErrorCode.server),
+    )
+    model = await models_svc.get_model(session, fav.id)
+    assert model is not None
+    assert model.status == "suspect"
+    assert model.consecutive_failures == 1
+    assert model.status_checked_at is not None
+    assert model.status_confirmed_at is not None
+    assert model.last_success_at is None
+
+    await results_svc.record_outcome(
+        session,
+        p,
+        fav.id,
+        ProbeTarget.chat_completion,
+        ProbeOutcome(success=False, http_status=500, latency_ms=100, error_code=ErrorCode.server),
+    )
+    model = await models_svc.get_model(session, fav.id)
+    assert model is not None
+    assert model.status == "offline"
+    assert model.status_reason == "server"
+    assert model.consecutive_failures == 2
+
+    await results_svc.record_outcome(
+        session,
+        p,
+        fav.id,
+        ProbeTarget.chat_completion,
+        ProbeOutcome(success=True, http_status=200, latency_ms=80),
+    )
+    model = await models_svc.get_model(session, fav.id)
+    assert model is not None
+    assert model.status == "online"
+    assert model.status_reason is None
+    assert model.consecutive_failures == 0
+    assert model.last_success_at is not None
+
+
+@pytest.mark.asyncio
+async def test_record_outcome_uses_precise_failure_status(session) -> None:
+    p = await providers_svc.create_provider(
+        session,
+        ProviderCreate(
+            name="p1",
+            kind=ProviderKind.openai,
+            base_url="https://api.openai.com",
+            api_key="k",
+        ),
+    )
+    model = (
+        await models_svc.upsert_discovered(
+            session, p.id, [DiscoveredModel(model_id="gpt-4o", type=ModelType.chat)]
+        )
+    )[0]
+
+    await results_svc.record_outcome(
+        session,
+        p,
+        model.id,
+        ProbeTarget.chat_completion,
+        ProbeOutcome(success=False, http_status=429, latency_ms=100, error_code=ErrorCode.rate_limit),
+    )
+    refreshed = await models_svc.get_model(session, model.id)
+    assert refreshed is not None
+    assert refreshed.status == "rate_limited"
+    assert refreshed.status_reason == "rate_limit"
+
+    await results_svc.record_outcome(
+        session,
+        p,
+        model.id,
+        ProbeTarget.chat_completion,
+        ProbeOutcome(success=False, http_status=404, latency_ms=100, error_code=ErrorCode.other),
+    )
+    refreshed = await models_svc.get_model(session, model.id)
+    assert refreshed is not None
+    assert refreshed.status == "not_found"
+
+
+@pytest.mark.asyncio
 async def test_cleanup_old_removes_old_rows(session) -> None:
     p = await providers_svc.create_provider(
         session,
@@ -359,13 +462,19 @@ async def test_dashboard_includes_favorite_model_status_details(session) -> None
             model_id_at_probe=other.model_id,
         )
     )
+    fav.status = "online"
+    fav.status_checked_at = base_now + timedelta(seconds=1)
+    fav.status_confirmed_at = base_now + timedelta(seconds=1)
+    fav.last_success_at = base_now + timedelta(seconds=1)
+    fav.consecutive_failures = 0
     await session.commit()
 
     dash = await results_svc.dashboard(session)
     favorite_models = dash.providers[0].favorite_models
     assert len(favorite_models) == 1
     assert favorite_models[0].model_id == "gpt-4o"
-    assert favorite_models[0].status == "ok"
+    assert favorite_models[0].status == "online"
+    assert favorite_models[0].last_success_at == fav.last_success_at
     assert favorite_models[0].latency_ms == 120
     assert favorite_models[0].ttfb_ms == 40
     assert favorite_models[0].availability_24h == 50

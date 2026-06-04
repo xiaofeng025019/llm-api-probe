@@ -258,6 +258,7 @@ async def test_e2e_daily_cleanup_removes_old_and_disables_stale() -> None:
                 target=ProbeTarget.list_models,
                 success=True,
                 latency_ms=10,
+                provider_name_at_probe=p.name,
             )
             s.add(old)
             await s.flush()
@@ -268,6 +269,7 @@ async def test_e2e_daily_cleanup_removes_old_and_disables_stale() -> None:
                 target=ProbeTarget.list_models,
                 success=True,
                 latency_ms=10,
+                provider_name_at_probe=p.name,
             )
             s.add(new)
             await s.commit()

@@ -7,6 +7,14 @@ export type ModelType =
   | "embedding"
   | "code"
   | "unknown";
+export type ModelHealthStatus =
+  | "online"
+  | "suspect"
+  | "offline"
+  | "rate_limited"
+  | "unauthorized"
+  | "not_found"
+  | "unknown";
 
 export interface Provider {
   id: number;
@@ -31,6 +39,12 @@ export interface ModelOut {
   enabled: boolean;
   is_favorite: boolean;
   last_seen_at: string;
+  status: ModelHealthStatus;
+  status_reason: string | null;
+  status_checked_at: string | null;
+  status_confirmed_at: string | null;
+  last_success_at: string | null;
+  consecutive_failures: number;
 }
 
 export interface DashboardFavoriteModel {
@@ -39,7 +53,11 @@ export interface DashboardFavoriteModel {
   display_name: string | null;
   type: ModelType;
   enabled: boolean;
-  status: "ok" | "fail" | null;
+  status: ModelHealthStatus | null;
+  status_reason: string | null;
+  status_checked_at: string | null;
+  status_confirmed_at: string | null;
+  last_success_at: string | null;
   last_checked_at: string | null;
   latency_ms: number | null;
   ttfb_ms: number | null;

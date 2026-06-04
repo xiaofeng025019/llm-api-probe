@@ -85,6 +85,12 @@ class ModelOut(BaseModel):
     enabled: bool
     is_favorite: bool
     last_seen_at: datetime
+    status: str = "unknown"
+    status_reason: str | None = None
+    status_checked_at: datetime | None = None
+    status_confirmed_at: datetime | None = None
+    last_success_at: datetime | None = None
+    consecutive_failures: int = 0
 
 
 class ModelPatch(BaseModel):
@@ -117,6 +123,10 @@ class DashboardFavoriteModel(BaseModel):
     type: ModelType
     enabled: bool
     status: str | None
+    status_reason: str | None = None
+    status_checked_at: datetime | None = None
+    status_confirmed_at: datetime | None = None
+    last_success_at: datetime | None = None
     last_checked_at: datetime | None
     latency_ms: int | None
     ttfb_ms: int | None

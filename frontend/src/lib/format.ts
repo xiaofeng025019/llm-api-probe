@@ -32,6 +32,25 @@ export function statusColor(status: "ok" | "degraded" | "fail" | null | undefine
   return "var(--unknown)";
 }
 
+export function modelHealthClass(status: string | null | undefined, enabled = true): string {
+  if (!enabled) return "warn";
+  if (status === "online") return "ok";
+  if (status === "offline" || status === "unauthorized" || status === "not_found") return "fail";
+  if (status === "suspect" || status === "rate_limited") return "warn";
+  return "unknown";
+}
+
+export function modelHealthLabel(status: string | null | undefined, enabled = true): string {
+  if (!enabled) return "disabled";
+  if (status === "online") return "online";
+  if (status === "suspect") return "suspect";
+  if (status === "offline") return "offline";
+  if (status === "rate_limited") return "rate limited";
+  if (status === "unauthorized") return "unauthorized";
+  if (status === "not_found") return "not found";
+  return "unknown";
+}
+
 export function modelTypeColor(type: string): string {
   switch (type) {
     case "chat":

@@ -8,6 +8,8 @@ import {
   parseApiDate,
   formatRelative,
   formatTime,
+  modelHealthClass,
+  modelHealthLabel,
   modelTypeColor,
   statusColor,
 } from "../lib/format";
@@ -499,7 +501,7 @@ export function ProviderDetailPage() {
                 <th scope="col">Status</th>
                 <th scope="col">Type</th>
                 <th scope="col">Enabled</th>
-                <th scope="col">Last probe</th>
+                <th scope="col">Status checked</th>
                 <th scope="col">24h</th>
                 <th scope="col">Samples</th>
                 <th scope="col">Latency</th>
@@ -507,6 +509,7 @@ export function ProviderDetailPage() {
                 <th scope="col">P95 Lat</th>
                 <th scope="col">P95 TTFB</th>
                 <th scope="col">Failures</th>
+                <th scope="col">Last success</th>
                 <th scope="col">Last seen</th>
                 <th style={{ width: 100 }} scope="col">
                   <span className="sr-only">Actions</span>
@@ -517,7 +520,8 @@ export function ProviderDetailPage() {
               {models.map((m) => {
                 const latest = latestResultByModel.get(m.id);
                 const quality = modelQualityById.get(m.id);
-                const status = !m.enabled ? "disabled" : latest?.success ? "ok" : latest ? "fail" : "unknown";
+                const statusClass = modelHealthClass(m.status, m.enabled);
+                const statusLabel = modelHealthLabel(m.status, m.enabled);
                 return (
                   <tr key={m.id}>
                     <td>
@@ -541,10 +545,15 @@ export function ProviderDetailPage() {
                       </div>
                     </td>
                     <td>
-                      <span className={`model-status-pill ${status}`}>
-                        <span className={`status-dot ${status === "disabled" ? "warn" : status}`} />
-                        {status}
-                      </span>
+                      <div className="model-status-stack">
+                        <span className={`model-status-pill ${statusClass}`}>
+                          <span className={`status-dot ${statusClass}`} />
+                          {statusLabel}
+                        </span>
+                        <span className="model-status-meta">
+                          {m.status_reason ?? (m.status_confirmed_at ? "confirmed" : "unconfirmed")}
+                        </span>
+                      </div>
                     </td>
                     <td>
                       <span
@@ -580,9 +589,9 @@ export function ProviderDetailPage() {
                       </label>
                     </td>
                     <td className="muted">
-                      {latest ? (
-                        <span title={formatTime(latest.checked_at)}>
-                          {formatRelative(latest.checked_at)}
+                      {m.status_checked_at ? (
+                        <span title={formatTime(m.status_checked_at)}>
+                          {formatRelative(m.status_checked_at)}
                         </span>
                       ) : (
                         "—"
@@ -595,9 +604,18 @@ export function ProviderDetailPage() {
                     <td className="mono">{formatMs(quality?.p95Latency)}</td>
                     <td className="mono">{formatMs(quality?.p95Ttfb)}</td>
                     <td>
-                      <span className={`pill ${quality?.consecutiveFailures ? "warn" : "ok"}`}>
-                        {quality?.consecutiveFailures ?? 0}
+                      <span className={`pill ${m.consecutive_failures ? "warn" : "ok"}`}>
+                        {m.consecutive_failures}
                       </span>
+                    </td>
+                    <td className="muted">
+                      {m.last_success_at ? (
+                        <span title={formatTime(m.last_success_at)}>
+                          {formatRelative(m.last_success_at)}
+                        </span>
+                      ) : (
+                        "—"
+                      )}
                     </td>
                     <td className="muted">
                       <span title={formatTime(m.last_seen_at)}>
@@ -622,7 +640,7 @@ export function ProviderDetailPage() {
               })}
               {models.length === 0 && (
                 <tr>
-                  <td colSpan={15}>
+                  <td colSpan={16}>
                     <div className="empty-state">
                       <p>没有模型。点 “更新模型清单” 拉取。</p>
                     </div>

@@ -1,7 +1,15 @@
 import { useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import { useDashboard } from "../hooks/useDashboard";
-import { formatMs, formatPercent, formatRelative, modelTypeColor, statusColor } from "../lib/format";
+import {
+  formatMs,
+  formatPercent,
+  formatRelative,
+  modelHealthClass,
+  modelHealthLabel,
+  modelTypeColor,
+  statusColor,
+} from "../lib/format";
 import { modelStatusIntervalLabel, modelStatusIntervalValue } from "../lib/settings";
 import { api, type DashboardFavoriteModel, type Provider } from "../api/types";
 import { withErrorToast } from "../lib/action";
@@ -43,10 +51,7 @@ function favoritesSub(totals: {
 }
 
 function modelStatusLabel(model: DashboardFavoriteModel): string {
-  if (!model.enabled) return "disabled";
-  if (model.status === "ok") return "online";
-  if (model.status === "fail") return "failing";
-  return "unknown";
+  return modelHealthLabel(model.status, model.enabled);
 }
 
 function errorSummary(counts: Record<string, number>): string {
@@ -466,7 +471,7 @@ function FavoriteModelStatus({
   onRefresh: () => Promise<void>;
 }) {
   const label = modelStatusLabel(model);
-  const statusClass = model.enabled ? (model.status ?? "unknown") : "warn";
+  const statusClass = modelHealthClass(model.status, model.enabled);
   const displayName = model.display_name || model.model_id;
 
   return (
@@ -489,8 +494,12 @@ function FavoriteModelStatus({
         <div className="favorite-model-meta">
           <span className="favorite-model-type">{model.type}</span>
           <span>{formatRelative(model.last_checked_at)}</span>
+          <span>confirmed {formatRelative(model.status_confirmed_at)}</span>
+          {model.last_success_at && <span>last ok {formatRelative(model.last_success_at)}</span>}
           <span>{model.samples_24h} samples</span>
-          {model.error_code && <span className="favorite-model-error">{model.error_code}</span>}
+          {(model.status_reason || model.error_code) && (
+            <span className="favorite-model-error">{model.status_reason ?? model.error_code}</span>
+          )}
         </div>
       </div>
 

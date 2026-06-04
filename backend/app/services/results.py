@@ -7,9 +7,59 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models import Model, ProbeResult, ProbeTarget, Provider
+from app.db.models import ErrorCode, Model, ProbeResult, ProbeTarget, Provider
 from app.probers.types import ProbeOutcome
 from app.schemas.api import DashboardFavoriteModel, DashboardOut, DashboardProvider
+from app.services import settings as settings_svc
+
+
+def _model_status_from_failure(outcome: ProbeOutcome, consecutive_failures: int, threshold: int) -> str:
+    if outcome.error_code == ErrorCode.auth or outcome.http_status in (401, 403):
+        return "unauthorized"
+    if outcome.error_code == ErrorCode.rate_limit or outcome.http_status == 429:
+        return "rate_limited"
+    message = (outcome.error_message or "").lower()
+    if outcome.http_status == 404 or "model_not_found" in message or "model not found" in message:
+        return "not_found"
+    return "offline" if consecutive_failures >= threshold else "suspect"
+
+
+async def _update_model_status(session: AsyncSession, model: Model, outcome: ProbeOutcome) -> None:
+    now = datetime.now(UTC)
+    previous_status = model.status
+    model.status_checked_at = now
+
+    if outcome.success:
+        model.status = "online"
+        model.status_reason = None
+        model.consecutive_failures = 0
+        model.last_success_at = now
+        if previous_status != model.status or model.status_confirmed_at is None:
+            model.status_confirmed_at = now
+        return
+
+    model.consecutive_failures = int(model.consecutive_failures or 0) + 1
+    threshold_key = (
+        settings_svc.FAVORITE_MODEL_FAILURE_CONFIRMATIONS_KEY
+        if model.is_favorite
+        else settings_svc.REGULAR_MODEL_FAILURE_CONFIRMATIONS_KEY
+    )
+    threshold_default = (
+        settings_svc.DEFAULT_FAVORITE_MODEL_FAILURE_CONFIRMATIONS
+        if model.is_favorite
+        else settings_svc.DEFAULT_REGULAR_MODEL_FAILURE_CONFIRMATIONS
+    )
+    threshold = await settings_svc.get_int_setting(session, threshold_key, threshold_default, minimum=1)
+    model.status = _model_status_from_failure(outcome, model.consecutive_failures, threshold)
+    model.status_reason = (
+        outcome.error_code.value
+        if outcome.error_code is not None
+        else f"HTTP {outcome.http_status}"
+        if outcome.http_status is not None
+        else "probe_failed"
+    )
+    if previous_status != model.status or model.status_confirmed_at is None:
+        model.status_confirmed_at = now
 
 
 async def record_outcome(
@@ -34,6 +84,8 @@ async def record_outcome(
         model_id_at_probe=model.model_id if model else None,
     )
     session.add(row)
+    if target == ProbeTarget.chat_completion and model is not None:
+        await _update_model_status(session, model, outcome)
     await session.commit()
     await session.refresh(row)
     return row
@@ -115,15 +167,6 @@ def _error_counts(rows: list[ProbeResult]) -> dict[str, int]:
     return counts
 
 
-def _consecutive_failures(rows_desc: list[ProbeResult]) -> int:
-    count = 0
-    for row in rows_desc:
-        if row.success:
-            break
-        count += 1
-    return count
-
-
 async def dashboard(session: AsyncSession) -> DashboardOut:
     now = datetime.now(UTC)
     cutoff_24h = now - timedelta(hours=24)
@@ -161,7 +204,6 @@ async def dashboard(session: AsyncSession) -> DashboardOut:
             recent_per_model[model_id] = bool(row.success)
 
     latest_by_model: dict[int, ProbeResult] = {}
-    results_by_model: dict[int, list[ProbeResult]] = {}
     latest_rows = (
         (
             await session.execute(
@@ -176,7 +218,6 @@ async def dashboard(session: AsyncSession) -> DashboardOut:
     for row in latest_rows:
         if row.model_id is None:
             continue
-        results_by_model.setdefault(row.model_id, []).append(row)
         if row.model_id not in latest_by_model:
             latest_by_model[row.model_id] = row
 
@@ -279,7 +320,11 @@ async def dashboard(session: AsyncSession) -> DashboardOut:
                     display_name=m.display_name,
                     type=m.type,
                     enabled=m.enabled,
-                    status=("ok" if latest and latest.success else "fail" if latest else None),
+                    status=m.status,
+                    status_reason=m.status_reason,
+                    status_checked_at=m.status_checked_at,
+                    status_confirmed_at=m.status_confirmed_at,
+                    last_success_at=m.last_success_at,
                     last_checked_at=latest.checked_at if latest else None,
                     latency_ms=latest.latency_ms if latest else None,
                     ttfb_ms=latest.ttfb_ms if latest else None,
@@ -289,7 +334,7 @@ async def dashboard(session: AsyncSession) -> DashboardOut:
                     samples_24h=recent_total,
                     p95_latency_ms_24h=_p95_ms(model_recent_results, "latency_ms"),
                     p95_ttfb_ms_24h=_p95_ms(model_recent_results, "ttfb_ms"),
-                    consecutive_failures=_consecutive_failures(results_by_model.get(m.id, [])),
+                    consecutive_failures=m.consecutive_failures,
                 )
             )
 

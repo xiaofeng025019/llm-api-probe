@@ -709,6 +709,11 @@ tbody tr:last-child td {
   color: var(--fail);
 }
 
+.model-status-pill.warn {
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+
 .model-status-pill.disabled {
   background: var(--warn-soft);
   color: var(--warn);
@@ -717,6 +722,22 @@ tbody tr:last-child td {
 .model-status-pill.unknown {
   background: var(--unknown-soft);
   color: var(--muted-strong);
+}
+
+.model-status-stack {
+  display: grid;
+  gap: 5px;
+  min-width: 112px;
+}
+
+.model-status-meta {
+  max-width: 150px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.25;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* ---------- forms -------------------------------------------------------- */

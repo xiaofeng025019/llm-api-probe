@@ -8,6 +8,8 @@ const KNOWN_KEYS = [
   { key: "default_interval_seconds", desc: "默认模型清单更新间隔（秒）", defaultValue: "300" },
   { key: "favorite_model_interval_seconds", desc: "重点关注模型状态检测间隔（秒）", defaultValue: "300" },
   { key: "regular_model_interval_seconds", desc: "普通模型状态检测间隔（秒）", defaultValue: "600" },
+  { key: "favorite_model_failure_confirmations", desc: "重点关注模型连续失败确认次数", defaultValue: "2" },
+  { key: "regular_model_failure_confirmations", desc: "普通模型连续失败确认次数", defaultValue: "3" },
   { key: "default_timeout_seconds", desc: "默认超时（秒）", defaultValue: "30" },
   { key: "max_concurrency", desc: "全局最大并发探测数", defaultValue: "10" },
   { key: "retention_days", desc: "历史结果保留天数", defaultValue: "30" },
