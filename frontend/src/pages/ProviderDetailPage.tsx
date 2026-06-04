@@ -28,6 +28,8 @@ import {
   IconProbe,
   IconStarOutline,
   IconModels,
+  IconGlobe,
+  IconNetwork,
 } from "../components/Icons";
 
 const WINDOWS: Array<{ label: string; hours: number }> = [
@@ -53,6 +55,16 @@ function consecutiveFailures(rowsDesc: ProbeResult[]): number {
     count += 1;
   }
   return count;
+}
+
+function errorCounts(rows: ProbeResult[]): Array<[string, number]> {
+  const counts = new Map<string, number>();
+  for (const row of rows) {
+    if (row.success) continue;
+    const key = row.error_code ?? (row.http_status ? `HTTP ${row.http_status}` : "unknown");
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  return [...counts.entries()].sort((a, b) => b[1] - a[1]);
 }
 
 export function ProviderDetailPage() {
@@ -166,20 +178,33 @@ export function ProviderDetailPage() {
     );
   }
 
-  const lastResult = results[0];
-  const successes = results.filter((r) => r.success).length;
+  const qualityResults = results.filter((r) => r.target === "chat_completion");
+  const sortedModelListResults = modelStatusResults
+    .filter((r) => r.target === "list_models")
+    .sort((a, b) => parseApiDate(b.checked_at).getTime() - parseApiDate(a.checked_at).getTime());
+  const latestModelListResult = sortedModelListResults[0];
+  const listModelsStatus = latestModelListResult
+    ? latestModelListResult.success
+      ? "ok"
+      : "fail"
+    : null;
+  const lastResult = qualityResults[0] ?? results[0];
+  const successes = qualityResults.filter((r) => r.success).length;
   const availability =
-    results.length > 0 ? (successes / results.length) * 100 : null;
+    qualityResults.length > 0 ? (successes / qualityResults.length) * 100 : null;
   const avgLatency =
-    results.length > 0
-      ? results
+    qualityResults.length > 0
+      ? qualityResults
           .filter((r) => r.success && r.latency_ms != null)
           .reduce((a, r) => a + (r.latency_ms ?? 0), 0) /
-        Math.max(1, results.filter((r) => r.success).length)
+        Math.max(1, qualityResults.filter((r) => r.success).length)
       : null;
-  const failures = results.length - successes;
-  const p95Latency = p95(results.map((r) => r.latency_ms));
-  const p95Ttfb = p95(results.map((r) => r.ttfb_ms));
+  const failures = qualityResults.length - successes;
+  const p95Latency = p95(qualityResults.map((r) => r.latency_ms));
+  const p95Ttfb = p95(qualityResults.map((r) => r.ttfb_ms));
+  const enabledModels = models.filter((m) => m.enabled).length;
+  const availableModels = models.filter((m) => m.enabled && latestResultByModel.get(m.id)?.success).length;
+  const selectedWindowErrors = errorCounts(qualityResults);
   const statusIntervalLabel = modelStatusIntervalLabel(settings);
 
   return (
@@ -309,10 +334,117 @@ export function ProviderDetailPage() {
         />
         <Stat
           label={`${window_.label} 样本`}
-          value={`${results.length} / ${failures}`}
+          value={`${qualityResults.length} / ${failures}`}
           hint="总数 / 失败"
           icon={<IconHash />}
         />
+      </div>
+
+      <div className="section fade-up">
+        <div className="section-header">
+          <div className="section-title">
+            <IconGauge />
+            Provider Quality
+          </div>
+          <span className="muted">{window_.label} window</span>
+        </div>
+        <div className="provider-quality-grid">
+          <div className="quality-tile quality-wide">
+            <div className="quality-tile-head">
+              <span>
+                <IconGlobe />
+                Endpoint
+              </span>
+              <span className={`pill ${provider.enabled ? "ok" : "warn"}`}>
+                {provider.enabled ? "monitoring" : "paused"}
+              </span>
+            </div>
+            <div className="endpoint-value" title={provider.base_url}>
+              {provider.base_url}
+            </div>
+            <div className="quality-meta">
+              <span>Timeout {provider.timeout_seconds}s</span>
+              <span>Probe {statusIntervalLabel}</span>
+              <span>Model list {provider.interval_seconds}s</span>
+              {provider.proxy && <span>Proxy configured</span>}
+            </div>
+          </div>
+
+          <div className="quality-tile">
+            <div className="quality-tile-head">
+              <span>
+                <IconRefresh />
+                Model List
+              </span>
+              <span className={`status-dot ${listModelsStatus ?? "unknown"}`} />
+            </div>
+            <div className="quality-value">
+              {latestModelListResult ? (latestModelListResult.success ? "OK" : "Failed") : "—"}
+            </div>
+            <div className="quality-meta">
+              <span>{formatMs(latestModelListResult?.latency_ms)}</span>
+              <span title={formatTime(latestModelListResult?.checked_at)}>
+                {formatRelative(latestModelListResult?.checked_at)}
+              </span>
+              {latestModelListResult?.error_code && <span>{latestModelListResult.error_code}</span>}
+            </div>
+          </div>
+
+          <div className="quality-tile">
+            <div className="quality-tile-head">
+              <span>
+                <IconModels />
+                Model Coverage
+              </span>
+            </div>
+            <div className="quality-value">
+              {availableModels} / {enabledModels}
+            </div>
+            <div className="quality-meta">
+              <span>Available Models</span>
+              <span>Total {models.length}</span>
+            </div>
+          </div>
+
+          <div className="quality-tile">
+            <div className="quality-tile-head">
+              <span>
+                <IconNetwork />
+                Communication
+              </span>
+            </div>
+            <div className="quality-value">{formatMs(p95Latency)}</div>
+            <div className="quality-meta">
+              <span>P95 latency</span>
+              <span>P95 TTFB {formatMs(p95Ttfb)}</span>
+              <span>Avg {formatMs(avgLatency)}</span>
+            </div>
+          </div>
+
+          <div className="quality-tile">
+            <div className="quality-tile-head">
+              <span>
+                <IconAlert />
+                Errors
+              </span>
+              <span className={`pill ${failures > 0 ? "fail" : "ok"}`}>{failures}</span>
+            </div>
+            {selectedWindowErrors.length > 0 ? (
+              <div className="error-chip-list" aria-label={`${window_.label} error distribution`}>
+                {selectedWindowErrors.slice(0, 4).map(([code, count]) => (
+                  <span className="error-chip" key={code}>
+                    {code} <strong>{count}</strong>
+                  </span>
+                ))}
+              </div>
+            ) : (
+              <div className="quality-value">No errors</div>
+            )}
+            <div className="quality-meta">
+              <span>{qualityResults.length} model probes</span>
+            </div>
+          </div>
+        </div>
       </div>
 
       <div className="card section fade-up">
