@@ -39,7 +39,7 @@ async def env():
             ),
         )
         await s.commit()
-        yield {"sm": sm, "provider_id": p.id, "session": s}
+        yield {"sm": sm, "provider_id": p.uuid_id, "session": s}
 
 
 @pytest.mark.asyncio
@@ -64,13 +64,13 @@ async def test_run_probe_handles_timeout_failure(env) -> None:
     async with env["sm"]() as s:
         ms = await models_svc.upsert_discovered(s, env["provider_id"], [DiscoveredModel(model_id="gpt-4o")])
         await s.commit()
-        model_id = ms[0].id
+        model_uuid = ms[0].uuid_id
 
     with respx.mock:
         respx.post("https://api.example.com/v1/chat/completions").mock(
             side_effect=httpx.ConnectTimeout("slow")
         )
-        await _run_probe(env["provider_id"], model_id, ProbeTarget.chat_completion, env["sm"])
+        await _run_probe(env["provider_id"], model_uuid, ProbeTarget.chat_completion, env["sm"])
 
     async with env["sm"]() as s:
         rows = list((await s.execute(ProbeResult.__table__.select())).all())
@@ -97,7 +97,9 @@ async def test_sync_jobs_adds_and_removes(env) -> None:
     async with env["sm"]() as s:
         from app.db.models import Provider
 
-        p = await s.get(Provider, env["provider_id"])
+        from sqlalchemy import select
+        result = await s.execute(select(Provider).where(Provider.uuid_id == env["provider_id"]))
+        p = result.scalar_one()
         p.enabled = False
         await s.commit()
     await sync_jobs_for_provider(env["provider_id"], session_maker=env["sm"])
@@ -132,13 +134,13 @@ async def test_sync_jobs_uses_faster_interval_for_favorite_models(env) -> None:
         )
         models[0].is_favorite = True
         await s.commit()
-        favorite_id = models[0].id
-        regular_id = models[1].id
+        favorite_uuid = models[0].uuid_id
+        regular_uuid = models[1].uuid_id
 
     await sync_jobs_for_provider(env["provider_id"], session_maker=env["sm"])
 
-    favorite_job = sched.get_job(f"p{env['provider_id']}:chat_completion:m{favorite_id}")
-    regular_job = sched.get_job(f"p{env['provider_id']}:chat_completion:m{regular_id}")
+    favorite_job = sched.get_job(f"p{env['provider_id']}:chat_completion:m{favorite_uuid}")
+    regular_job = sched.get_job(f"p{env['provider_id']}:chat_completion:m{regular_uuid}")
     assert favorite_job is not None
     assert regular_job is not None
     assert favorite_job.trigger.interval.total_seconds() == 120
@@ -151,7 +153,9 @@ async def test_trigger_now_returns_false_when_disabled(env) -> None:
     async with env["sm"]() as s:
         from app.db.models import Provider
 
-        p = await s.get(Provider, env["provider_id"])
+        from sqlalchemy import select
+        result = await s.execute(select(Provider).where(Provider.uuid_id == env["provider_id"]))
+        p = result.scalar_one()
         p.enabled = False
         await s.commit()
     assert await trigger_now(env["provider_id"], None, session_maker=env["sm"]) is False
@@ -167,9 +171,9 @@ async def test_trigger_now_returns_false_for_disabled_model(env) -> None:
     async with env["sm"]() as s:
         ms = await models_svc.upsert_discovered(s, env["provider_id"], [DiscoveredModel(model_id="gpt-4o")])
         await s.commit()
-        model_id = ms[0].id
+        model_uuid = ms[0].uuid_id
         # disable the model
-        m = await s.get(Model, model_id)
+        m = await s.get(Model, ms[0].id)
         m.enabled = False
         await s.commit()
-    assert await trigger_now(env["provider_id"], model_id, session_maker=env["sm"]) is False
+    assert await trigger_now(env["provider_id"], model_uuid, session_maker=env["sm"]) is False

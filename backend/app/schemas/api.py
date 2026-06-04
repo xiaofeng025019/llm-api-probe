@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import uuid
 from datetime import datetime
 from typing import Any
 
@@ -58,8 +59,8 @@ class ProviderPatch(BaseModel):
 
 
 class ProviderOut(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-    id: int
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+    id: uuid.UUID = Field(validation_alias="uuid_id", serialization_alias="id")
     name: str
     kind: ProviderKind
     base_url: str
@@ -76,9 +77,9 @@ class ProviderOut(BaseModel):
 
 
 class ModelOut(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-    id: int
-    provider_id: int
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+    id: uuid.UUID = Field(validation_alias="uuid_id", serialization_alias="id")
+    provider_id: uuid.UUID = Field(validation_alias="provider_uuid", serialization_alias="provider_id")
     model_id: str
     display_name: str | None
     type: ModelType
@@ -96,10 +97,10 @@ class ModelPatch(BaseModel):
 
 
 class ProbeResultOut(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-    id: int
-    provider_id: int
-    model_id: int | None
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+    id: uuid.UUID = Field(validation_alias="uuid_id", serialization_alias="id")
+    provider_id: uuid.UUID = Field(validation_alias="provider_uuid", serialization_alias="provider_id")
+    model_id: uuid.UUID | None = Field(validation_alias="model_uuid", serialization_alias="model_id")
     target: ProbeTarget
     success: bool
     http_status: int | None
@@ -111,7 +112,7 @@ class ProbeResultOut(BaseModel):
 
 
 class DashboardFavoriteModel(BaseModel):
-    id: int
+    id: uuid.UUID
     model_id: str
     display_name: str | None
     type: ModelType
@@ -126,7 +127,7 @@ class DashboardFavoriteModel(BaseModel):
 
 
 class DashboardProvider(BaseModel):
-    provider_id: int
+    provider_id: uuid.UUID
     name: str
     kind: ProviderKind
     enabled: bool
@@ -150,7 +151,7 @@ class DashboardOut(BaseModel):
 
 
 class SettingOut(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
     key: str
     value: str
     updated_at: datetime

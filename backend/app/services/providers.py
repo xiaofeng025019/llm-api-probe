@@ -2,23 +2,38 @@
 
 from __future__ import annotations
 
-from sqlalchemy import delete, select
+import uuid
+from datetime import UTC, datetime
+
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import Provider
 from app.schemas.api import ProviderCreate, ProviderPatch
 
 
-async def list_providers(session: AsyncSession) -> list[Provider]:
-    res = await session.execute(select(Provider).order_by(Provider.id))
+async def list_providers(session: AsyncSession, include_deleted: bool = False) -> list[Provider]:
+    """List all providers, optionally including soft-deleted ones."""
+    query = select(Provider).order_by(Provider.name)
+    if not include_deleted:
+        query = query.where(Provider.deleted_at.is_(None))
+    res = await session.execute(query)
     return list(res.scalars().all())
 
 
-async def get_provider(session: AsyncSession, provider_id: int) -> Provider | None:
-    return await session.get(Provider, provider_id)
+async def get_provider(
+    session: AsyncSession, provider_id: uuid.UUID, include_deleted: bool = False
+) -> Provider | None:
+    """Get a provider by UUID, optionally including soft-deleted ones."""
+    query = select(Provider).where(Provider.uuid_id == provider_id)
+    if not include_deleted:
+        query = query.where(Provider.deleted_at.is_(None))
+    res = await session.execute(query)
+    return res.scalar_one_or_none()
 
 
 async def create_provider(session: AsyncSession, data: ProviderCreate) -> Provider:
+    """Create a new provider (uuid_id is auto-generated)."""
     p = Provider(
         name=data.name,
         kind=data.kind,
@@ -36,8 +51,11 @@ async def create_provider(session: AsyncSession, data: ProviderCreate) -> Provid
     return p
 
 
-async def patch_provider(session: AsyncSession, provider_id: int, data: ProviderPatch) -> Provider | None:
-    p = await session.get(Provider, provider_id)
+async def patch_provider(
+    session: AsyncSession, provider_id: uuid.UUID, data: ProviderPatch
+) -> Provider | None:
+    """Update a provider by UUID (only active providers)."""
+    p = await get_provider(session, provider_id, include_deleted=False)
     if p is None:
         return None
     for field_, value in data.model_dump(exclude_unset=True).items():
@@ -47,7 +65,11 @@ async def patch_provider(session: AsyncSession, provider_id: int, data: Provider
     return p
 
 
-async def delete_provider(session: AsyncSession, provider_id: int) -> bool:
-    res = await session.execute(delete(Provider).where(Provider.id == provider_id))
+async def delete_provider(session: AsyncSession, provider_id: uuid.UUID) -> bool:
+    """Soft-delete a provider by setting deleted_at timestamp."""
+    p = await get_provider(session, provider_id, include_deleted=False)
+    if p is None:
+        return False
+    p.deleted_at = datetime.now(UTC)
     await session.commit()
-    return getattr(res, "rowcount", 0) > 0
+    return True

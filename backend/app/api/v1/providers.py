@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import uuid
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -38,12 +40,12 @@ async def create_(body: ProviderCreate, session: AsyncSession = Depends(get_sess
     if any(p.name == body.name for p in await providers_svc.list_providers(session)):
         raise HTTPException(status_code=409, detail=f"provider name already exists: {body.name}")
     p = await providers_svc.create_provider(session, body)
-    await sync_jobs_for_provider(p.id)
+    await sync_jobs_for_provider(p.uuid_id)
     return ApiResponse(data=ProviderOut.model_validate(p))
 
 
 @router.get("/{provider_id}", response_model=ApiResponse)
-async def read(provider_id: int, session: AsyncSession = Depends(get_session)) -> ApiResponse:
+async def read(provider_id: uuid.UUID, session: AsyncSession = Depends(get_session)) -> ApiResponse:
     p = await providers_svc.get_provider(session, provider_id)
     if p is None:
         raise HTTPException(status_code=404, detail="provider not found")
@@ -52,7 +54,7 @@ async def read(provider_id: int, session: AsyncSession = Depends(get_session)) -
 
 @router.patch("/{provider_id}", response_model=ApiResponse)
 async def patch(
-    provider_id: int, body: ProviderPatch, session: AsyncSession = Depends(get_session)
+    provider_id: uuid.UUID, body: ProviderPatch, session: AsyncSession = Depends(get_session)
 ) -> ApiResponse:
     p = await providers_svc.patch_provider(session, provider_id, body)
     if p is None:
@@ -62,15 +64,15 @@ async def patch(
 
 
 @router.delete("/{provider_id}", response_model=ApiResponse)
-async def delete(provider_id: int, session: AsyncSession = Depends(get_session)) -> ApiResponse:
+async def delete(provider_id: uuid.UUID, session: AsyncSession = Depends(get_session)) -> ApiResponse:
     if not await providers_svc.delete_provider(session, provider_id):
         raise HTTPException(status_code=404, detail="provider not found")
-    await sync_jobs_for_provider(provider_id)  # will remove all jobs for this id
-    return ApiResponse(data={"deleted": provider_id})
+    await sync_jobs_for_provider(provider_id)  # will remove all jobs for this provider
+    return ApiResponse(data={"deleted": str(provider_id)})
 
 
 @router.post("/{provider_id}/sync-models", response_model=ApiResponse)
-async def sync_models(provider_id: int, session: AsyncSession = Depends(get_session)) -> ApiResponse:
+async def sync_models(provider_id: uuid.UUID, session: AsyncSession = Depends(get_session)) -> ApiResponse:
     """Manually trigger a list_models probe right now."""
     p = await providers_svc.get_provider(session, provider_id)
     if p is None:
@@ -92,13 +94,13 @@ async def sync_models(provider_id: int, session: AsyncSession = Depends(get_sess
 
 
 @router.get("/{provider_id}/models", response_model=ApiResponse)
-async def list_models(provider_id: int, session: AsyncSession = Depends(get_session)) -> ApiResponse:
+async def list_models(provider_id: uuid.UUID, session: AsyncSession = Depends(get_session)) -> ApiResponse:
     items = await models_svc.list_models(session, provider_id)
     return ApiResponse(data=[ModelOut.model_validate(m) for m in items])
 
 
 @router.post("/{provider_id}/run", response_model=ApiResponse)
-async def run_now(provider_id: int, session: AsyncSession = Depends(get_session)) -> ApiResponse:
+async def run_now(provider_id: uuid.UUID, session: AsyncSession = Depends(get_session)) -> ApiResponse:
     p = await providers_svc.get_provider(session, provider_id)
     if p is None:
         raise HTTPException(status_code=404, detail="provider not found")

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import uuid
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import delete, func, select
@@ -19,6 +20,14 @@ async def record_outcome(
     target: ProbeTarget,
     outcome: ProbeOutcome,
 ) -> ProbeResult:
+    """Record a probe outcome with snapshot fields for historical integrity."""
+    # Get model_id string for snapshot (if applicable)
+    model_id_str = None
+    if model_db_id is not None:
+        model = await session.get(Model, model_db_id)
+        if model is not None:
+            model_id_str = model.model_id
+
     row = ProbeResult(
         provider_id=provider.id,
         model_id=model_db_id,
@@ -29,6 +38,9 @@ async def record_outcome(
         ttfb_ms=outcome.ttfb_ms,
         error_code=outcome.error_code,
         error_message=(outcome.error_message[:1000] if outcome.error_message else None),
+        # Snapshot fields - capture state at probe time
+        provider_name_at_probe=provider.name,
+        model_id_at_probe=model_id_str,
     )
     session.add(row)
     await session.commit()
@@ -38,18 +50,25 @@ async def record_outcome(
 
 async def list_results(
     session: AsyncSession,
-    provider_id: int | None = None,
-    model_id: int | None = None,
+    provider_id: uuid.UUID | None = None,
+    model_id: uuid.UUID | None = None,
     since: datetime | None = None,
     limit: int = 200,
 ) -> list[ProbeResult]:
+    """List probe results, optionally filtered by provider/model UUID."""
     stmt = select(ProbeResult).order_by(ProbeResult.checked_at.desc()).limit(limit)
+
     if provider_id is not None:
-        stmt = stmt.where(ProbeResult.provider_id == provider_id)
+        # Join with Provider to filter by UUID
+        stmt = stmt.join(Provider, ProbeResult.provider_id == Provider.id).where(
+            Provider.uuid_id == provider_id
+        )
     if model_id is not None:
-        stmt = stmt.where(ProbeResult.model_id == model_id)
+        # Join with Model to filter by UUID
+        stmt = stmt.join(Model, ProbeResult.model_id == Model.id).where(Model.uuid_id == model_id)
     if since is not None:
         stmt = stmt.where(ProbeResult.checked_at >= since)
+
     res = await session.execute(stmt)
     return list(res.scalars().all())
 
@@ -98,7 +117,12 @@ async def dashboard(session: AsyncSession) -> DashboardOut:
     now = datetime.now(UTC)
     cutoff_24h = now - timedelta(hours=24)
 
-    providers = list((await session.execute(select(Provider).order_by(Provider.id))).scalars().all())
+    # Only include non-deleted providers
+    providers = list(
+        (await session.execute(select(Provider).where(Provider.deleted_at.is_(None)).order_by(Provider.id)))
+        .scalars()
+        .all()
+    )
 
     # Single query to compute "most recent probe result per model" in the
     # past 24h. ORDER BY checked_at DESC, then we keep the first row seen
@@ -172,7 +196,16 @@ async def dashboard(session: AsyncSession) -> DashboardOut:
     }
 
     for p in providers:
-        models = list((await session.execute(select(Model).where(Model.provider_id == p.id))).scalars().all())
+        # Only include non-deleted models
+        models = list(
+            (
+                await session.execute(
+                    select(Model).where(Model.provider_id == p.id, Model.deleted_at.is_(None))
+                )
+            )
+            .scalars()
+            .all()
+        )
         last = await session.execute(
             select(ProbeResult)
             .where(ProbeResult.provider_id == p.id)
@@ -230,7 +263,7 @@ async def dashboard(session: AsyncSession) -> DashboardOut:
             availability_24h = round(recent_success / recent_total * 100, 2) if recent_total > 0 else None
             favorite_models.append(
                 DashboardFavoriteModel(
-                    id=m.id,
+                    id=m.uuid_id,
                     model_id=m.model_id,
                     display_name=m.display_name,
                     type=m.type,
@@ -247,7 +280,7 @@ async def dashboard(session: AsyncSession) -> DashboardOut:
 
         out.append(
             DashboardProvider(
-                provider_id=p.id,
+                provider_id=p.uuid_id,
                 name=p.name,
                 kind=p.kind,
                 enabled=p.enabled,

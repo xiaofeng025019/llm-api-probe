@@ -7,7 +7,6 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import (
-    Boolean,
     DateTime,
     ForeignKey,
     Index,
@@ -16,6 +15,7 @@ from sqlalchemy import (
     Text,
     Uuid,
     func,
+    text,
 )
 from sqlalchemy import (
     Enum as SAEnum,
@@ -58,10 +58,13 @@ class ProbeTarget(str, enum.Enum):
 
 class Provider(Base):
     __tablename__ = "providers"
+    __table_args__ = (
+        Index("ix_providers_name_active", "name", unique=True, sqlite_where=text("deleted_at IS NULL")),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     uuid_id: Mapped[uuid.UUID] = mapped_column(Uuid, unique=True, index=True, default=uuid.uuid4)
-    name: Mapped[str] = mapped_column(String(120), unique=True, index=True)
+    name: Mapped[str] = mapped_column(String(120), index=True)
     kind: Mapped[ProviderKind] = mapped_column(SAEnum(ProviderKind))
     base_url: Mapped[str] = mapped_column(String(500))
     api_key: Mapped[str] = mapped_column(String(500))
@@ -94,7 +97,12 @@ class Model(Base):
     last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, default=None)
 
-    provider: Mapped[Provider] = relationship(back_populates="models")
+    provider: Mapped[Provider] = relationship(back_populates="models", lazy="joined")
+    
+    @property
+    def provider_uuid(self) -> uuid.UUID:
+        """Return the provider's uuid_id for API responses."""
+        return self.provider.uuid_id if self.provider else None
     results: Mapped[list[ProbeResult]] = relationship(back_populates="model", cascade="all, delete-orphan")
 
 
@@ -128,6 +136,17 @@ class ProbeResult(Base):
     model_id_at_probe: Mapped[str | None] = mapped_column(String(300), nullable=True)
 
     model: Mapped[Model | None] = relationship(back_populates="results")
+    provider_rel: Mapped[Provider] = relationship(lazy="joined")
+
+    @property
+    def provider_uuid(self) -> uuid.UUID:
+        """Return the provider's uuid_id for API responses."""
+        return self.provider_rel.uuid_id if self.provider_rel else None
+
+    @property
+    def model_uuid(self) -> uuid.UUID | None:
+        """Return the model's uuid_id for API responses."""
+        return self.model.uuid_id if self.model else None
 
 
 class Setting(Base):

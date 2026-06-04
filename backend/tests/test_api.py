@@ -93,7 +93,8 @@ async def test_provider_duplicate_name_409(api_client: httpx.AsyncClient) -> Non
 
 @pytest.mark.asyncio
 async def test_provider_404(api_client: httpx.AsyncClient) -> None:
-    r = await api_client.get("/api/v1/providers/999")
+    import uuid
+    r = await api_client.get(f"/api/v1/providers/{uuid.uuid4()}")
     assert r.status_code == 404
 
 
@@ -217,7 +218,7 @@ async def test_export_includes_favorites(api_client: httpx.AsyncClient) -> None:
     """Exported payload should include a favorites_by_provider map
     that mirrors which model_ids are is_favorite=True on each provider."""
     # Seed: one provider with two models, one of them a favorite.
-    await api_client.post(
+    r = await api_client.post(
         "/api/v1/providers",
         json={
             "name": "fav-test",
@@ -226,6 +227,7 @@ async def test_export_includes_favorites(api_client: httpx.AsyncClient) -> None:
             "api_key": "k",
         },
     )
+    pid = r.json()["data"]["id"]
     with respx.mock:
         respx.get("https://api.openai.com/v1/models").mock(
             return_value=httpx.Response(
@@ -233,8 +235,8 @@ async def test_export_includes_favorites(api_client: httpx.AsyncClient) -> None:
                 json={"data": [{"id": "gpt-4o"}, {"id": "gpt-4o-mini"}]},
             )
         )
-        await api_client.post("/api/v1/providers/1/sync-models")
-    r = await api_client.get("/api/v1/providers/1/models")
+        await api_client.post(f"/api/v1/providers/{pid}/sync-models")
+    r = await api_client.get(f"/api/v1/providers/{pid}/models")
     models = r.json()["data"]
     fav = next(m for m in models if m["model_id"] == "gpt-4o")
     await api_client.patch(f"/api/v1/models/{fav['id']}", json={"is_favorite": True})
@@ -252,34 +254,25 @@ async def test_import_restores_favorites(api_client: httpx.AsyncClient) -> None:
     provider has had its model list synced (otherwise the favorite
     model_id can't be matched to a row)."""
     # Seed one provider with two models; export with fav on 'gpt-4o'.
-    await api_client.post(
+    r = await api_client.post(
         "/api/v1/providers",
         json={"name": "p", "kind": "openai", "base_url": "https://x", "api_key": "k"},
     )
+    pid = r.json()["data"]["id"]
     with respx.mock:
         respx.get("https://x/v1/models").mock(
             return_value=httpx.Response(200, json={"data": [{"id": "gpt-4o"}, {"id": "gpt-4o-mini"}]})
         )
-        await api_client.post("/api/v1/providers/1/sync-models")
-    r = await api_client.get("/api/v1/providers/1/models")
+        await api_client.post(f"/api/v1/providers/{pid}/sync-models")
+    r = await api_client.get(f"/api/v1/providers/{pid}/models")
     fav = next(m for m in r.json()["data"] if m["model_id"] == "gpt-4o")
     await api_client.patch(f"/api/v1/models/{fav['id']}", json={"is_favorite": True})
 
     exported = (await api_client.post("/api/v1/export")).json()["data"]
     assert exported["favorites_by_provider"] == {"p": ["gpt-4o"]}
 
-    # Wipe, re-create, re-sync models (so set_favorites has rows to
-    # target), then import.
-    await api_client.delete("/api/v1/providers/1")
-    await api_client.post(
-        "/api/v1/providers",
-        json={"name": "p", "kind": "openai", "base_url": "https://x", "api_key": "k"},
-    )
-    with respx.mock:
-        respx.get("https://x/v1/models").mock(
-            return_value=httpx.Response(200, json={"data": [{"id": "gpt-4o"}, {"id": "gpt-4o-mini"}]})
-        )
-        await api_client.post("/api/v1/providers/2/sync-models")
+    # Wipe, then import (which should restore the soft-deleted provider).
+    await api_client.delete(f"/api/v1/providers/{pid}")
 
     r = await api_client.post("/api/v1/import", json=exported)
     assert r.status_code == 200
@@ -318,5 +311,6 @@ async def test_probe_run_triggers(api_client: httpx.AsyncClient) -> None:
     ).json()["data"]["id"]
     r = await api_client.post(f"/api/v1/probe/run?provider_id={pid}")
     assert r.status_code == 200
-    r = await api_client.post("/api/v1/probe/run?provider_id=9999")
+    import uuid as _uuid
+    r = await api_client.post(f"/api/v1/probe/run?provider_id={_uuid.uuid4()}")
     assert r.status_code == 404

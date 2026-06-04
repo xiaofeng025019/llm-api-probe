@@ -74,8 +74,8 @@ async def test_e2e_openai_probe_with_models_and_sse() -> None:
                     api_key="sk-test",
                 ),
             )
-            assert p.id is not None
-            await sync_jobs_for_provider(p.id, session_maker=sm)
+            assert p.uuid_id is not None
+            await sync_jobs_for_provider(p.uuid_id, session_maker=sm)
 
         # mocked upstream: list_models
         with respx.mock(assert_all_called=False) as mock:
@@ -92,7 +92,7 @@ async def test_e2e_openai_probe_with_models_and_sse() -> None:
                 )
             )
             # run list_models probe directly
-            await _run_probe(1, None, ProbeTarget.list_models, session_maker=sm)
+            await _run_probe(p.uuid_id, None, ProbeTarget.list_models, session_maker=sm)
 
             # chat completion stream
             async def gen():
@@ -108,8 +108,8 @@ async def test_e2e_openai_probe_with_models_and_sse() -> None:
                 from sqlalchemy import select
 
                 m = (await s.execute(select(Model).where(Model.model_id == "gpt-4o"))).scalar_one()
-                mid = m.id
-            await _run_probe(1, mid, ProbeTarget.chat_completion, session_maker=sm)
+                mid = m.uuid_id
+            await _run_probe(p.uuid_id, mid, ProbeTarget.chat_completion, session_maker=sm)
 
         # give SSE reader time to drain
         await asyncio.sleep(0.2)
@@ -162,13 +162,13 @@ async def test_e2e_anthropic_probe_sends_headers() -> None:
                     api_key="sk-ant-test",
                 ),
             )
-            await sync_jobs_for_provider(p.id, session_maker=sm)
+            await sync_jobs_for_provider(p.uuid_id, session_maker=sm)
 
         with respx.mock:
             respx.post("https://api.anthropic.com/v1/messages").mock(
                 return_value=httpx.Response(200, json={"content": [{"text": "ok"}]})
             )
-            await _run_probe(1, None, ProbeTarget.list_models, session_maker=sm)
+            await _run_probe(p.uuid_id, None, ProbeTarget.list_models, session_maker=sm)
         # list_models for anthropic returns empty success without HTTP call
         async with sm() as s:
             r = (await s.execute(ProbeResult.__table__.select())).first()
@@ -202,7 +202,7 @@ async def test_e2e_gemini_probe_with_query_key() -> None:
                     api_key="KEY123",
                 ),
             )
-            await sync_jobs_for_provider(p.id, session_maker=sm)
+            await sync_jobs_for_provider(p.uuid_id, session_maker=sm)
 
         called_urls: list[str] = []
         with respx.mock:
@@ -212,7 +212,7 @@ async def test_e2e_gemini_probe_with_query_key() -> None:
                     or httpx.Response(200, json={"models": [{"name": "models/gemini-1.5-pro"}]})
                 )
             )
-            await _run_probe(1, None, ProbeTarget.list_models, session_maker=sm)
+            await _run_probe(p.uuid_id, None, ProbeTarget.list_models, session_maker=sm)
         assert called_urls, "should have made HTTP call"
         assert "key=KEY123" in called_urls[0], f"missing api key in URL: {called_urls[0]}"
 
@@ -258,6 +258,7 @@ async def test_e2e_daily_cleanup_removes_old_and_disables_stale() -> None:
                 target=ProbeTarget.list_models,
                 success=True,
                 latency_ms=10,
+                provider_name_at_probe=p.name,
             )
             s.add(old)
             await s.flush()
@@ -268,6 +269,7 @@ async def test_e2e_daily_cleanup_removes_old_and_disables_stale() -> None:
                 target=ProbeTarget.list_models,
                 success=True,
                 latency_ms=10,
+                provider_name_at_probe=p.name,
             )
             s.add(new)
             await s.commit()
@@ -279,7 +281,7 @@ async def test_e2e_daily_cleanup_removes_old_and_disables_stale() -> None:
             assert len(remaining) == 1
 
             # stale model
-            ms = await upsert_discovered(s, p.id, [DiscoveredModel(model_id="stale-1")])
+            ms = await upsert_discovered(s, p.uuid_id, [DiscoveredModel(model_id="stale-1")])
             ms[0].last_seen_at = datetime.now() - timedelta(days=30)
             await s.commit()
             disabled = await disable_stale(s, days=7)

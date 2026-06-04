@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -39,8 +40,8 @@ async def dashboard(session: AsyncSession = Depends(get_session)) -> ApiResponse
 
 @router.get("/results", response_model=ApiResponse)
 async def list_results(
-    provider_id: int | None = None,
-    model_id: int | None = None,
+    provider_id: uuid.UUID | None = None,
+    model_id: uuid.UUID | None = None,
     hours: int = Query(default=24, ge=1, le=24 * 30),
     limit: int = Query(default=200, ge=1, le=1000),
     session: AsyncSession = Depends(get_session),
@@ -73,19 +74,16 @@ async def import_(
     created = 0
     updated = 0
     favorites_restored = 0
-    existing = {p.name: p for p in await providers_svc.list_providers(session)}
+    # Check both active and soft-deleted providers
+    existing_active = {p.name: p for p in await providers_svc.list_providers(session)}
+    existing_deleted = {p.name: p for p in await providers_svc.list_providers(session, include_deleted=True) if p.deleted_at is not None}
+    
     for spec in body.providers:
-        existing_p = existing.get(spec.name)
-        if existing_p is None:
-            if not spec.api_key:
-                # A brand-new provider must have a key.
-                raise HTTPException(
-                    status_code=400,
-                    detail=(f"provider {spec.name!r} is new; an api_key is required."),
-                )
-            await providers_svc.create_provider(session, spec)
-            created += 1
-        else:
+        existing_p = existing_active.get(spec.name)
+        deleted_p = existing_deleted.get(spec.name)
+        
+        if existing_p is not None:
+            # Update existing active provider
             patch_data: dict[str, Any] = {
                 "base_url": spec.base_url,
                 "interval_seconds": spec.interval_seconds,
@@ -95,8 +93,38 @@ async def import_(
                 "enabled": spec.enabled,
                 "api_key": spec.api_key,
             }
-            await providers_svc.patch_provider(session, existing_p.id, ProviderPatch(**patch_data))
+            await providers_svc.patch_provider(session, existing_p.uuid_id, ProviderPatch(**patch_data))
             updated += 1
+        elif deleted_p is not None:
+            # Restore soft-deleted provider directly (patch_provider
+            # can't reach soft-deleted rows since it filters by
+            # include_deleted=False, and ProviderPatch has no
+            # deleted_at field).
+            deleted_p.deleted_at = None
+            deleted_p.base_url = spec.base_url
+            deleted_p.kind = spec.kind
+            deleted_p.interval_seconds = spec.interval_seconds
+            deleted_p.timeout_seconds = spec.timeout_seconds
+            if spec.proxy is not None:
+                deleted_p.proxy = spec.proxy
+            if spec.headers_json is not None:
+                deleted_p.headers_json = spec.headers_json
+            deleted_p.enabled = spec.enabled
+            if spec.api_key:
+                deleted_p.api_key = spec.api_key
+            await session.commit()
+            await session.refresh(deleted_p)
+            updated += 1
+        else:
+            # Create new provider
+            if not spec.api_key:
+                # A brand-new provider must have a key.
+                raise HTTPException(
+                    status_code=400,
+                    detail=(f"provider {spec.name!r} is new; an api_key is required."),
+                )
+            await providers_svc.create_provider(session, spec)
+            created += 1
     if body.settings:
         await settings_svc.upsert_settings(session, body.settings)
 
@@ -114,7 +142,7 @@ async def import_(
                 # favorites_restored count and the export's `providers`
                 # field is the source of truth.
                 continue
-            favorites_restored += await models_svc.set_favorites(session, prov.id, model_ids)
+            favorites_restored += await models_svc.set_favorites(session, prov.uuid_id, model_ids)
 
     await sync_all_jobs()
     return ApiResponse(
@@ -136,7 +164,7 @@ async def export_(session: AsyncSession = Depends(get_session)) -> ApiResponse:
     # names at that point.
     favorites_by_provider: dict[str, list[str]] = {}
     for p in providers:
-        favs = [m.model_id for m in await models_svc.list_models(session, p.id) if m.is_favorite]
+        favs = [m.model_id for m in await models_svc.list_models(session, p.uuid_id) if m.is_favorite]
         if favs:
             favorites_by_provider[p.name] = favs
     payload = ExportPayload(
@@ -164,8 +192,8 @@ async def export_(session: AsyncSession = Depends(get_session)) -> ApiResponse:
 
 @router.post("/probe/run", response_model=ApiResponse)
 async def probe_run(
-    provider_id: int | None = None,
-    model_id: int | None = None,
+    provider_id: uuid.UUID | None = None,
+    model_id: uuid.UUID | None = None,
     session: AsyncSession = Depends(get_session),
 ) -> ApiResponse:
     if provider_id is None:
@@ -176,7 +204,7 @@ async def probe_run(
         m = await models_svc.get_model(session, model_id)
         if m is None:
             raise HTTPException(status_code=404, detail="model not found")
-        if m.provider_id != provider_id:
+        if m.provider_uuid != provider_id:
             raise HTTPException(
                 status_code=400,
                 detail=f"model {model_id} does not belong to provider {provider_id}",

@@ -51,8 +51,8 @@ async def test_create_and_list_provider(session) -> None:
             api_key="sk-test",
         ),
     )
-    assert p.id is not None
-    assert (await providers_svc.get_provider(session, p.id)).name == "openai-1"
+    assert p.uuid_id is not None
+    assert (await providers_svc.get_provider(session, p.uuid_id)).name == "openai-1"
     assert len(await providers_svc.list_providers(session)) == 1
 
 
@@ -67,7 +67,9 @@ async def test_patch_provider_updates_fields(session) -> None:
             api_key="k",
         ),
     )
-    out = await providers_svc.patch_provider(session, p.id, ProviderPatch(interval_seconds=60, enabled=False))
+    out = await providers_svc.patch_provider(
+        session, p.uuid_id, ProviderPatch(interval_seconds=60, enabled=False)
+    )
     assert out is not None
     assert out.interval_seconds == 60
     assert out.enabled is False
@@ -84,8 +86,8 @@ async def test_delete_provider_returns_true(session) -> None:
             api_key="k",
         ),
     )
-    assert await providers_svc.delete_provider(session, p.id)
-    assert (await providers_svc.get_provider(session, p.id)) is None
+    assert await providers_svc.delete_provider(session, p.uuid_id)
+    assert (await providers_svc.get_provider(session, p.uuid_id)) is None
 
 
 # ---------- model upsert / favorite -----------------------------------------
@@ -104,7 +106,7 @@ async def test_upsert_discovered_inserts_and_updates(session) -> None:
     )
     out = await models_svc.upsert_discovered(
         session,
-        p.id,
+        p.uuid_id,
         [
             DiscoveredModel(model_id="gpt-4o", type=ModelType.chat),
             DiscoveredModel(model_id="dall-e-3", type=ModelType.image),
@@ -114,10 +116,10 @@ async def test_upsert_discovered_inserts_and_updates(session) -> None:
     # upsert same again -> no new rows
     await models_svc.upsert_discovered(
         session,
-        p.id,
+        p.uuid_id,
         [DiscoveredModel(model_id="gpt-4o", type=ModelType.chat)],
     )
-    assert len(await models_svc.list_models(session, p.id)) == 2
+    assert len(await models_svc.list_models(session, p.uuid_id)) == 2
 
 
 @pytest.mark.asyncio
@@ -132,9 +134,9 @@ async def test_patch_model_favorite(session) -> None:
         ),
     )
     out = await models_svc.upsert_discovered(
-        session, p.id, [DiscoveredModel(model_id="gpt-4o", type=ModelType.chat)]
+        session, p.uuid_id, [DiscoveredModel(model_id="gpt-4o", type=ModelType.chat)]
     )
-    m = await models_svc.patch_model(session, out[0].id, ModelPatch(is_favorite=True, enabled=False))
+    m = await models_svc.patch_model(session, out[0].uuid_id, ModelPatch(is_favorite=True, enabled=False))
     assert m is not None
     assert m.is_favorite is True
     assert m.enabled is False
@@ -152,14 +154,14 @@ async def test_disable_stale(session) -> None:
         ),
     )
     out = await models_svc.upsert_discovered(
-        session, p.id, [DiscoveredModel(model_id="old-1", type=ModelType.chat)]
+        session, p.uuid_id, [DiscoveredModel(model_id="old-1", type=ModelType.chat)]
     )
     # backdate last_seen_at
     out[0].last_seen_at = datetime.now() - timedelta(days=30)
     await session.commit()
     n = await models_svc.disable_stale(session, days=7)
     assert n == 1
-    assert (await models_svc.get_model(session, out[0].id)).enabled is False
+    assert (await models_svc.get_model(session, out[0].uuid_id)).enabled is False
 
 
 # ---------- result write + dashboard + cleanup -----------------------------
@@ -205,7 +207,7 @@ async def test_cleanup_old_removes_old_rows(session) -> None:
     await session.commit()
     removed = await results_svc.cleanup_old(session, retention_days=30)
     assert removed == 1
-    assert (await results_svc.list_results(session, provider_id=p.id, limit=10)) == []  # only old row existed
+    assert (await results_svc.list_results(session, provider_id=p.uuid_id, limit=10)) == []  # only old row existed
 
 
 @pytest.mark.asyncio
@@ -221,7 +223,7 @@ async def test_dashboard_aggregates_24h(session) -> None:
     )
     fav = (
         await models_svc.upsert_discovered(
-            session, p.id, [DiscoveredModel(model_id="gpt-4o", type=ModelType.chat)]
+            session, p.uuid_id, [DiscoveredModel(model_id="gpt-4o", type=ModelType.chat)]
         )
     )[0]
     fav.is_favorite = True
@@ -269,7 +271,7 @@ async def test_dashboard_available_models_counts_recent_per_model(session) -> No
     )
     ms = await models_svc.upsert_discovered(
         session,
-        p.id,
+        p.uuid_id,
         [
             DiscoveredModel(model_id="gpt-4o"),
             DiscoveredModel(model_id="gpt-4o-mini"),
@@ -307,7 +309,7 @@ async def test_dashboard_includes_favorite_model_status_details(session) -> None
     )
     fav, other = await models_svc.upsert_discovered(
         session,
-        p.id,
+        p.uuid_id,
         [
             DiscoveredModel(model_id="gpt-4o"),
             DiscoveredModel(model_id="gpt-4o-mini"),
@@ -329,6 +331,8 @@ async def test_dashboard_includes_favorite_model_status_details(session) -> None
             error_code=ErrorCode.server,
             error_message="server failed",
             checked_at=base_now,
+            provider_name_at_probe=p.name,
+            model_id_at_probe=fav.model_id,
         )
     )
     session.add(
@@ -341,6 +345,8 @@ async def test_dashboard_includes_favorite_model_status_details(session) -> None
             latency_ms=120,
             ttfb_ms=40,
             checked_at=base_now + timedelta(seconds=1),
+            provider_name_at_probe=p.name,
+            model_id_at_probe=fav.model_id,
         )
     )
     session.add(
@@ -351,6 +357,8 @@ async def test_dashboard_includes_favorite_model_status_details(session) -> None
             success=True,
             latency_ms=50,
             checked_at=base_now + timedelta(seconds=2),
+            provider_name_at_probe=p.name,
+            model_id_at_probe=other.model_id,
         )
     )
     await session.commit()
@@ -373,7 +381,7 @@ async def test_dashboard_provider_health_uses_provider_and_model_signals(session
     )
     m1, m2 = await models_svc.upsert_discovered(
         session,
-        p.id,
+        p.uuid_id,
         [DiscoveredModel(model_id="ok-model"), DiscoveredModel(model_id="bad-model")],
     )
     await session.commit()
@@ -401,7 +409,7 @@ async def test_dashboard_provider_health_fails_when_list_models_fails(session) -
         session,
         ProviderCreate(name="p1", kind=ProviderKind.openai, base_url="https://x", api_key="k"),
     )
-    m = (await models_svc.upsert_discovered(session, p.id, [DiscoveredModel(model_id="ok-model")]))[0]
+    m = (await models_svc.upsert_discovered(session, p.uuid_id, [DiscoveredModel(model_id="ok-model")]))[0]
     await session.commit()
 
     await results_svc.record_outcome(
@@ -427,7 +435,7 @@ async def test_dashboard_favorites_delta_24h_ago(session) -> None:
     )
     ms = await models_svc.upsert_discovered(
         session,
-        p.id,
+        p.uuid_id,
         [DiscoveredModel(model_id="fav-stable"), DiscoveredModel(model_id="fav-flipped")],
     )
     for m in ms:
@@ -451,6 +459,8 @@ async def test_dashboard_favorites_delta_24h_ago(session) -> None:
             success=True,
             latency_ms=10,
             checked_at=base_old,
+            provider_name_at_probe=p.name,
+            model_id_at_probe=ms[0].model_id,
         )
     )
     session.add(
@@ -461,6 +471,8 @@ async def test_dashboard_favorites_delta_24h_ago(session) -> None:
             success=True,
             latency_ms=10,
             checked_at=base_old,
+            provider_name_at_probe=p.name,
+            model_id_at_probe=ms[0].model_id,
         )
     )
     session.add(
@@ -471,6 +483,8 @@ async def test_dashboard_favorites_delta_24h_ago(session) -> None:
             success=True,
             latency_ms=10,
             checked_at=base_now,
+            provider_name_at_probe=p.name,
+            model_id_at_probe=ms[0].model_id,
         )
     )
     session.add(
@@ -481,6 +495,8 @@ async def test_dashboard_favorites_delta_24h_ago(session) -> None:
             success=False,
             latency_ms=10,
             checked_at=base_now + timedelta(seconds=1),
+            provider_name_at_probe=p.name,
+            model_id_at_probe=ms[0].model_id,
         )
     )
     await session.commit()
@@ -502,7 +518,7 @@ async def test_dashboard_ignores_list_models_probes_for_model_count(session) -> 
         session,
         ProviderCreate(name="p1", kind=ProviderKind.openai, base_url="https://x", api_key="k"),
     )
-    ms = await models_svc.upsert_discovered(session, p.id, [DiscoveredModel(model_id="gpt-4o")])
+    ms = await models_svc.upsert_discovered(session, p.uuid_id, [DiscoveredModel(model_id="gpt-4o")])
     await session.commit()
     m = ms[0]
     # One list_models probe (no model_id) and one chat_completion failure.
