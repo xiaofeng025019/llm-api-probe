@@ -11,6 +11,27 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 _BACKEND_ROOT = Path(__file__).resolve().parent.parent.parent
 
 
+def _resolve_frontend_dist() -> Path:
+    """Pick the first existing candidate for the built frontend.
+
+    Order matches the three layouts this project actually ships:
+      * repo checkout: <repo>/frontend/dist           (sibling of backend/)
+      * local dev:     <backend>/../frontend/dist     (same as above, explicit)
+      * docker image:  <backend>/frontend_dist        (Dockerfile copies it there)
+    Falls back to the first candidate so .exists() downstream returns False
+    and the placeholder branch runs (better than crashing on import).
+    """
+    candidates: tuple[Path, ...] = (
+        _BACKEND_ROOT / "frontend_dist",
+        _BACKEND_ROOT.parent / "frontend" / "dist",
+        _BACKEND_ROOT / ".." / "frontend" / "dist",
+    )
+    for c in candidates:
+        if c.exists():
+            return c.resolve()
+    return candidates[0]
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
@@ -31,7 +52,7 @@ class Settings(BaseSettings):
     probe_max_tokens: int = 1
     tz: str = "Asia/Shanghai"
 
-    frontend_dist: Path = _BACKEND_ROOT.parent / "frontend" / "dist"
+    frontend_dist: Path = _resolve_frontend_dist()
 
     def model_post_init(self, __context):
         self.data_dir.mkdir(parents=True, exist_ok=True)

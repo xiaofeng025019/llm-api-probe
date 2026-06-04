@@ -1,4 +1,4 @@
-import { useNavigate } from "react-router-dom";
+import { useNavigate, Link } from "react-router-dom";
 import { useDashboard } from "../hooks/useDashboard";
 import { formatPercent, formatRelative, modelTypeBg, statusColor } from "../lib/format";
 import { api, type Provider } from "../api/types";
@@ -416,38 +416,17 @@ function StatCard({
   hint?: string;
   to?: string;
 }) {
-  const nav = useNavigate();
   const clickable = !!to;
-  function onActivate() {
-    if (to) nav(to);
-  }
-  return (
-    <div
-      className="stat"
-      role={clickable ? "link" : undefined}
-      tabIndex={clickable ? 0 : undefined}
-      aria-label={clickable ? `查看 ${label}` : undefined}
-      onClick={clickable ? onActivate : undefined}
-      onKeyDown={
-        clickable
-          ? (e) => {
-              if (e.key === "Enter" || e.key === " ") {
-                e.preventDefault();
-                onActivate();
-              }
-            }
-          : undefined
-      }
-      style={
-        {
-          ["--accent-color" as string]: accentColor,
-          ["--accent-bg" as string]: accentColor
-            ? `color-mix(in srgb, ${accentColor} 12%, transparent)`
-            : undefined,
-          cursor: clickable ? "pointer" : undefined,
-        } as React.CSSProperties
-      }
-    >
+  // The card's a11y name includes the headline number (the most important
+  // data on the dashboard) plus the navigation target. Format:
+  //   "Providers 3, 查看详情" / "Favorites online 8 of 12, 查看"
+  const friendlyValue =
+    typeof value === "number" ? value.toString() : String(value);
+  const ariaLabel = clickable
+    ? `${label} ${friendlyValue}${hint ? `, ${hint}` : ""}, 查看详情`
+    : `${label} ${friendlyValue}`;
+  const inner = (
+    <>
       <div className="label">{label}</div>
       <div className="value">{value}</div>
       {hint && <div className="hint">{hint}</div>}
@@ -471,7 +450,41 @@ function StatCard({
           <polyline points="9 18 15 12 9 6" />
         </svg>
       )}
-    </div>
+    </>
+  );
+  if (!clickable) {
+    return (
+      <div
+        className="stat"
+        style={
+          {
+            ["--accent-color" as string]: accentColor,
+            ["--accent-bg" as string]: accentColor
+              ? `color-mix(in srgb, ${accentColor} 12%, transparent)`
+              : undefined,
+          } as React.CSSProperties
+        }
+      >
+        {inner}
+      </div>
+    );
+  }
+  return (
+    <Link
+      to={to!}
+      className="stat stat-link"
+      aria-label={ariaLabel}
+      style={
+        {
+          ["--accent-color" as string]: accentColor,
+          ["--accent-bg" as string]: accentColor
+              ? `color-mix(in srgb, ${accentColor} 12%, transparent)`
+              : undefined,
+        } as React.CSSProperties
+      }
+    >
+      {inner}
+    </Link>
   );
 }
 

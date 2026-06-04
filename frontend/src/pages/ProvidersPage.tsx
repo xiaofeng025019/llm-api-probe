@@ -18,28 +18,49 @@ export function ProvidersPage() {
   const [params, setParams] = useSearchParams();
 
   // URL-driven filter state: ?status=ok|fail&favorites=1
-  const statusFilter: StatusFilter = (params.get("status") as StatusFilter) || "all";
+  // Use a whitelist — anything else (typo'd URL, old bookmark) is treated
+  // as "all" so the UI is always recoverable and the active tab is honest.
+  const rawStatus = params.get("status");
+  const statusFilter: StatusFilter =
+    rawStatus === "ok" || rawStatus === "fail" ? rawStatus : "all";
+  // favorites is treated as a boolean flag: any truthy string = on.
+  // (Accepts '1', 'true', 'on' for friendlier hand-edited URLs.)
+  const rawFav = params.get("favorites");
   const favFilter: FavoriteFilter =
-    params.get("favorites") === "1" ? "favorites" : "all";
+    rawFav !== null && rawFav !== "" && rawFav !== "0" && rawFav !== "false"
+      ? "favorites"
+      : "all";
 
   function setStatus(s: StatusFilter) {
-    const next = new URLSearchParams(params);
-    if (s === "all") next.delete("status");
-    else next.set("status", s);
-    setParams(next, { replace: true });
+    // Functional updater: never lose a same-tick update to a stale closure.
+    setParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        if (s === "all") next.delete("status");
+        else next.set("status", s);
+        return next;
+      },
+      // No replace: keep history so browser-back returns to the previous
+      // filter (matches native <select> and tab UX).
+    );
   }
   function setFav(f: FavoriteFilter) {
-    const next = new URLSearchParams(params);
-    if (f === "all") next.delete("favorites");
-    else next.set("favorites", "1");
-    setParams(next, { replace: true });
+    setParams((prev) => {
+      const next = new URLSearchParams(prev);
+      if (f === "all") next.delete("favorites");
+      else next.set("favorites", "1");
+      return next;
+    });
   }
 
   const lastStatusById = useMemo(
     () => Object.fromEntries(
       (dashboard?.providers ?? []).map((p) => [p.provider_id, p.last_status]),
     ),
-    [dashboard],
+    // Depend on the providers array reference, not the whole `dashboard`
+    // object — the dashboard is a new ref on every refresh (new {}), which
+    // would invalidate this memo unnecessarily on every SSE tick.
+    [dashboard?.providers],
   );
 
   const filtered = useMemo(() => {
@@ -79,7 +100,11 @@ export function ProvidersPage() {
         <span className="muted" style={{ fontSize: 12 }}>
           过滤：
         </span>
-        <div className="window-tabs" role="tablist" aria-label="按状态过滤">
+        <div
+          className="window-tabs"
+          role="toolbar"
+          aria-label="按状态过滤"
+        >
           {(
             [
               { v: "all", label: "全部" },
@@ -89,8 +114,8 @@ export function ProvidersPage() {
           ).map((opt) => (
             <button
               key={opt.v}
-              role="tab"
-              aria-selected={statusFilter === opt.v}
+              type="button"
+              aria-pressed={statusFilter === opt.v}
               className={statusFilter === opt.v ? "active" : ""}
               onClick={() => setStatus(opt.v)}
             >
@@ -98,7 +123,11 @@ export function ProvidersPage() {
             </button>
           ))}
         </div>
-        <div className="window-tabs" role="tablist" aria-label="按收藏过滤">
+        <div
+          className="window-tabs"
+          role="toolbar"
+          aria-label="按收藏过滤"
+        >
           {(
             [
               { v: "all", label: "全部模型" },
@@ -107,8 +136,8 @@ export function ProvidersPage() {
           ).map((opt) => (
             <button
               key={opt.v}
-              role="tab"
-              aria-selected={favFilter === opt.v}
+              type="button"
+              aria-pressed={favFilter === opt.v}
               className={favFilter === opt.v ? "active" : ""}
               onClick={() => setFav(opt.v)}
             >

@@ -50,11 +50,20 @@ def run_migrations_offline() -> None:
 
 def run_migrations_online() -> None:
     """Run migrations online using a sync engine."""
-    connectable = engine_from_config(
-        config.get_section(config.config_ini_section, {}),
-        prefix="sqlalchemy.",
-        poolclass=pool.NullPool,
-    )
+    from sqlalchemy import event as _sa_event
+
+    section = dict(config.get_section(config.config_ini_section, {}))
+    section["sqlalchemy.connect_args"] = {"check_same_thread": False, "timeout": 10}
+    connectable = engine_from_config(section, prefix="sqlalchemy.", poolclass=pool.NullPool)
+
+    @_sa_event.listens_for(connectable, "connect")
+    def _set_pragma(dbapi_conn, _):
+        cur = dbapi_conn.cursor()
+        cur.execute("PRAGMA journal_mode=WAL")
+        cur.execute("PRAGMA busy_timeout=10000")
+        cur.execute("PRAGMA synchronous=NORMAL")
+        cur.close()
+
     with connectable.connect() as connection:
         context.configure(
             connection=connection,

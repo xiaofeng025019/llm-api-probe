@@ -486,6 +486,12 @@ textarea {
   letter-spacing: -0.02em;
   color: var(--accent-color, var(--text));
   position: relative;
+  /* Reserve room for the absolutely-positioned .stat-icon (32px wide,
+     18px from the right edge) so multi-digit values like '10 / 12' or
+     '1234' don't get clipped. */
+  padding-right: 48px;
+  min-height: 32px;
+  line-height: 1.2;
 }
 
 .stat .hint {
