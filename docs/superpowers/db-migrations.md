@@ -150,3 +150,17 @@ def upgrade() -> None:
 - ❌ 直接改 `data/llm_usability.db` 绕开迁移 — 下次启动会试图迁移然后失败
 - ❌ 删 `alembic_version` 表的行 — alembic 会以为从未跑过迁移，重头跑一遍
 - ❌ 修改已发布的迁移脚本（改 hash）— 别人的本地库会进入 unknown revision 状态
+
+## 现有用户升级路径（pre-Alembic → Alembic）
+
+如果你在引入 Alembic **之前**已经用过本服务（用旧的 `create_all` 建过表），DB 已经有 5 张业务表但**没有** `alembic_version` 表。下次启动时 `alembic upgrade head` 会试图跑 `4a7be4f2d8b0` 迁移，里面全是 `op.create_table(...)`，会因"表已存在"失败。
+
+**一次性 fix**：
+```bash
+cd backend
+uv run alembic stamp head
+```
+
+`stamp head` 把当前 DB 标记为"已经在 head 修订"，不实际跑任何迁移。下次启动 `alembic upgrade head` 看到标记就直接跳过。
+
+这步只需要在升级到含 Alembic 的版本时做一次。之后所有 schema 变更都按标准流程走。
