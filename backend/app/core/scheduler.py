@@ -64,10 +64,27 @@ def get_scheduler() -> AsyncIOScheduler:
     global _scheduler
     if _scheduler is None:
         settings = get_settings()
-        # APScheduler SQLAlchemyJobStore wants a sync URL
-        sync_url = settings.sync_database_url
+        # APScheduler SQLAlchemyJobStore wants a sync engine. We build a small
+        # sync engine with busy_timeout so it waits on the writer lock held by
+        # the async app connections instead of raising immediately.
+        from sqlalchemy import create_engine as _create_sync_engine
+        from sqlalchemy import event as _sa_event
+
+        sync_engine = _create_sync_engine(
+            settings.sync_database_url,
+            connect_args={"check_same_thread": False, "timeout": 5},
+        )
+
+        @_sa_event.listens_for(sync_engine, "connect")
+        def _set_pragma(dbapi_conn, _):
+            cur = dbapi_conn.cursor()
+            cur.execute("PRAGMA journal_mode=WAL")
+            cur.execute("PRAGMA busy_timeout=5000")
+            cur.execute("PRAGMA synchronous=NORMAL")
+            cur.close()
+
         _scheduler = AsyncIOScheduler(
-            jobstores={"default": SQLAlchemyJobStore(url=sync_url)},
+            jobstores={"default": SQLAlchemyJobStore(engine=sync_engine)},
             timezone=settings.tz,
         )
     return _scheduler

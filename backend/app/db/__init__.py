@@ -30,7 +30,16 @@ async def init_db(
 ) -> None:
     engine = engine or get_engine()
     sm = session_maker or get_session_maker()
+    # Set SQLite pragmas on every new connection. WAL allows concurrent
+    # readers + a single writer; busy_timeout makes the writer wait instead
+    # of raising "database is locked" when APScheduler's sync jobstore and
+    # the async app connections race.
     async with engine.begin() as conn:
+        from sqlalchemy import text
+
+        await conn.execute(text("PRAGMA journal_mode=WAL"))
+        await conn.execute(text("PRAGMA busy_timeout=5000"))
+        await conn.execute(text("PRAGMA synchronous=NORMAL"))
         await conn.run_sync(Base.metadata.create_all)
     async with sm() as session:
         await seed_default_settings(session)
