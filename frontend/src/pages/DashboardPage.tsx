@@ -93,30 +93,35 @@ export function DashboardPage() {
             value={dashboard.totals.providers}
             icon={<IconServer />}
             accentColor="var(--primary)"
+            to="/providers"
           />
           <StatCard
             label="Models"
             value={dashboard.totals.models}
             icon={<IconModels />}
             accentColor="var(--info)"
+            to="/providers"
           />
           <StatCard
             label="OK"
             value={dashboard.totals.ok}
             icon={<IconCheck />}
             accentColor="var(--ok)"
+            to="/providers?status=ok"
           />
           <StatCard
             label="Failing"
             value={dashboard.totals.failing}
             icon={<IconAlert />}
             accentColor="var(--fail)"
+            to="/providers?status=fail"
           />
           <StatCard
             label="Favorites online"
             value={`${dashboard.totals.favorites_online} / ${dashboard.totals.favorites_total}`}
             icon={<IconStarOutline filled />}
             accentColor="var(--warn)"
+            to="/models"
             hint={
               dashboard.totals.favorites_total === 0
                 ? "未收藏任何模型"
@@ -402,22 +407,44 @@ function StatCard({
   icon,
   accentColor,
   hint,
+  to,
 }: {
   label: string;
   value: string | number;
   icon: React.ReactNode;
   accentColor?: string;
   hint?: string;
+  to?: string;
 }) {
+  const nav = useNavigate();
+  const clickable = !!to;
+  function onActivate() {
+    if (to) nav(to);
+  }
   return (
     <div
       className="stat"
+      role={clickable ? "link" : undefined}
+      tabIndex={clickable ? 0 : undefined}
+      aria-label={clickable ? `查看 ${label}` : undefined}
+      onClick={clickable ? onActivate : undefined}
+      onKeyDown={
+        clickable
+          ? (e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                onActivate();
+              }
+            }
+          : undefined
+      }
       style={
         {
           ["--accent-color" as string]: accentColor,
           ["--accent-bg" as string]: accentColor
             ? `color-mix(in srgb, ${accentColor} 12%, transparent)`
             : undefined,
+          cursor: clickable ? "pointer" : undefined,
         } as React.CSSProperties
       }
     >
@@ -427,6 +454,23 @@ function StatCard({
       <div className="stat-icon" aria-hidden="true">
         {icon}
       </div>
+      {clickable && (
+        <svg
+          className="stat-chevron"
+          width="14"
+          height="14"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          aria-hidden="true"
+          style={{ position: "absolute", right: 16, bottom: 14, color: "var(--muted)" }}
+        >
+          <polyline points="9 18 15 12 9 6" />
+        </svg>
+      )}
     </div>
   );
 }

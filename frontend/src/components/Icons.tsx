@@ -127,6 +127,7 @@ export const IconBolt = IconZap;
 
 export const Icon = {
   Plus: IconPlus,
+  Close: IconClose,
   Run: IconPlay,
   Sync: IconRefresh,
   Delete: IconDelete,
@@ -145,6 +146,7 @@ export const Icon = {
   Star: IconStarOutline,
   Search: IconSearch,
   Back: IconBack,
+  Filter: IconFilter,
   Globe: IconGlobe,
 };
 

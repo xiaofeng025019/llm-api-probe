@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { api, Provider, ProviderKind } from "../api/types";
 import { useDashboard } from "../hooks/useDashboard";
 import { formatRelative, statusColor } from "../lib/format";
@@ -7,15 +7,58 @@ import { Icon } from "../components/Icons";
 import { withErrorToast } from "../lib/action";
 import { pushToast } from "../components/Toast";
 
+type StatusFilter = "all" | "ok" | "fail";
+type FavoriteFilter = "all" | "favorites";
+
 export function ProvidersPage() {
   const nav = useNavigate();
   const { providers, dashboard, modelsByProvider, refresh } = useDashboard();
   const [showAdd, setShowAdd] = useState(false);
   const [editing, setEditing] = useState<Provider | null>(null);
+  const [params, setParams] = useSearchParams();
 
-  const lastStatusById = Object.fromEntries(
-    (dashboard?.providers ?? []).map((p) => [p.provider_id, p.last_status]),
+  // URL-driven filter state: ?status=ok|fail&favorites=1
+  const statusFilter: StatusFilter = (params.get("status") as StatusFilter) || "all";
+  const favFilter: FavoriteFilter =
+    params.get("favorites") === "1" ? "favorites" : "all";
+
+  function setStatus(s: StatusFilter) {
+    const next = new URLSearchParams(params);
+    if (s === "all") next.delete("status");
+    else next.set("status", s);
+    setParams(next, { replace: true });
+  }
+  function setFav(f: FavoriteFilter) {
+    const next = new URLSearchParams(params);
+    if (f === "all") next.delete("favorites");
+    else next.set("favorites", "1");
+    setParams(next, { replace: true });
+  }
+
+  const lastStatusById = useMemo(
+    () => Object.fromEntries(
+      (dashboard?.providers ?? []).map((p) => [p.provider_id, p.last_status]),
+    ),
+    [dashboard],
   );
+
+  const filtered = useMemo(() => {
+    return providers.filter((p) => {
+      if (statusFilter !== "all") {
+        const st = lastStatusById[p.id];
+        if (statusFilter === "ok" && st !== "ok") return false;
+        if (statusFilter === "fail" && st !== "fail") return false;
+      }
+      if (favFilter === "favorites") {
+        const ms = modelsByProvider[p.id] ?? [];
+        if (!ms.some((m) => m.is_favorite)) return false;
+      }
+      return true;
+    });
+  }, [providers, statusFilter, favFilter, lastStatusById, modelsByProvider]);
+
+  const totalUnfiltered = providers.length;
+  const hasFilter = statusFilter !== "all" || favFilter !== "all";
 
   return (
     <div>
@@ -32,6 +75,59 @@ export function ProvidersPage() {
         </div>
       </div>
 
+      <div className="toolbar" style={{ marginBottom: 16 }}>
+        <span className="muted" style={{ fontSize: 12 }}>
+          过滤：
+        </span>
+        <div className="window-tabs" role="tablist" aria-label="按状态过滤">
+          {(
+            [
+              { v: "all", label: "全部" },
+              { v: "ok", label: "正常" },
+              { v: "fail", label: "失败" },
+            ] as { v: StatusFilter; label: string }[]
+          ).map((opt) => (
+            <button
+              key={opt.v}
+              role="tab"
+              aria-selected={statusFilter === opt.v}
+              className={statusFilter === opt.v ? "active" : ""}
+              onClick={() => setStatus(opt.v)}
+            >
+              {opt.label}
+            </button>
+          ))}
+        </div>
+        <div className="window-tabs" role="tablist" aria-label="按收藏过滤">
+          {(
+            [
+              { v: "all", label: "全部模型" },
+              { v: "favorites", label: "★ 收藏" },
+            ] as { v: FavoriteFilter; label: string }[]
+          ).map((opt) => (
+            <button
+              key={opt.v}
+              role="tab"
+              aria-selected={favFilter === opt.v}
+              className={favFilter === opt.v ? "active" : ""}
+              onClick={() => setFav(opt.v)}
+            >
+              {opt.label}
+            </button>
+          ))}
+        </div>
+        <span className="grow" />
+        <span className="muted" style={{ fontSize: 12 }}>
+          显示 {filtered.length} / {totalUnfiltered}
+        </span>
+        {hasFilter && (
+          <button className="ghost sm" onClick={() => setParams(new URLSearchParams(), { replace: true })}>
+            <Icon.Close />
+            清除过滤
+          </button>
+        )}
+      </div>
+
       {providers.length === 0 ? (
         <div className="card">
           <div className="empty-state">
@@ -46,13 +142,30 @@ export function ProvidersPage() {
             </button>
           </div>
         </div>
+      ) : filtered.length === 0 ? (
+        <div className="card">
+          <div className="empty-state">
+            <div className="empty-state-icon">
+              <Icon.Filter />
+            </div>
+            <h3>没有匹配的 provider</h3>
+            <p>尝试调整或清除过滤条件。</p>
+            <button
+              className="secondary"
+              onClick={() => setParams(new URLSearchParams(), { replace: true })}
+              style={{ marginTop: 12 }}
+            >
+              清除过滤
+            </button>
+          </div>
+        </div>
       ) : (
         <div
           className="provider-grid stagger"
           role="list"
           aria-label="Providers"
         >
-          {providers.map((p) => {
+          {filtered.map((p) => {
             const dash = dashboard?.providers.find((d) => d.provider_id === p.id);
             const models = modelsByProvider[p.id] ?? [];
             const status = lastStatusById[p.id];
@@ -75,7 +188,11 @@ export function ProvidersPage() {
                 <div className="head">
                   <div>
                     <div className="name">
-                      <span className={`status-dot ${status ?? "unknown"}`} />
+                      <span
+                        className={`status-dot ${status ?? "unknown"}`}
+                        title={`Status: ${status ?? "unknown"}`}
+                        aria-label={`Status: ${status ?? "unknown"}`}
+                      />
                       {p.name}
                     </div>
                     <div className="meta">
