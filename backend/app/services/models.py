@@ -47,6 +47,22 @@ async def get_model(
     return res.scalar_one_or_none()
 
 
+async def find_model_by_uuid(
+    session: AsyncSession, model_uuid: uuid.UUID, include_deleted: bool = True
+) -> Model | None:
+    """Resolve a model by its UUID snapshot.
+
+    Use this when cross-referencing a `probe_results.model_uuid_at_probe`
+    back to the current `models` row. Defaults to `include_deleted=True`
+    so historical probes of soft-deleted models can still be
+    attributed.
+
+    Returns `None` if the model was hard-deleted and no longer exists
+    in the table (the snapshot is the only remaining evidence).
+    """
+    return await get_model(session, model_uuid, include_deleted=include_deleted)
+
+
 async def patch_model(session: AsyncSession, model_id: uuid.UUID, data: ModelPatch) -> Model | None:
     """Update a model by UUID (only active models)."""
     m = await get_model(session, model_id, include_deleted=False)

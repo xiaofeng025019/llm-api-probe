@@ -72,7 +72,23 @@ async def record_outcome(
     target: ProbeTarget,
     outcome: ProbeOutcome,
 ) -> ProbeResult:
-    """Record a probe outcome with snapshot fields for historical integrity."""
+    """Record a probe outcome with snapshot fields for historical integrity.
+
+    The row stores two kinds of cross-references:
+
+    1. **Integer FKs** (`provider_id`, `model_id`) — fast JOINs for
+       live lookups, but they go NULL or get reassigned when rows
+       are hard-deleted or schemas are reseeded.
+    2. **UUID snapshots** (`provider_uuid_at_probe`,
+       `model_uuid_at_probe`) plus **string snapshots**
+       (`provider_name_at_probe`, `model_id_at_probe`) — stable
+       identifiers that survive hard-deletes, renames, and
+       cross-database restores.
+
+    Use the UUID snapshots for any historical reporting or
+    cross-referencing that must stay valid across the lifecycle of the
+    provider/model.
+    """
     model = await session.get(Model, model_db_id) if model_db_id is not None else None
     row = ProbeResult(
         provider_id=provider.id,
@@ -84,9 +100,15 @@ async def record_outcome(
         ttfb_ms=outcome.ttfb_ms,
         error_code=outcome.error_code,
         error_message=(outcome.error_message[:1000] if outcome.error_message else None),
-        # Snapshot fields - capture state at probe time
+        # String snapshots — the upstream-visible identity at probe time.
         provider_name_at_probe=provider.name,
         model_id_at_probe=model.model_id if model else None,
+        # UUID snapshots — the stable internal identifier of the target.
+        # `provider_uuid_at_probe` is always set (every probe has a
+        # provider). `model_uuid_at_probe` is NULL for probes without
+        # a model (e.g. list_models probes when no model row matched).
+        provider_uuid_at_probe=provider.uuid_id,
+        model_uuid_at_probe=model.uuid_id if model else None,
     )
     session.add(row)
     if target == ProbeTarget.chat_completion and model is not None:

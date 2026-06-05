@@ -138,6 +138,54 @@ keeps the model + its result history intact, hidden from active queries by
 `deleted_at`, applies current config). This is the same name-recycle story
 described in `docs/superpowers/db-migrations.md`.
 
+## UUID snapshot pattern (historical identity)
+
+The `probe_results` table has TWO kinds of cross-references to its target
+provider/model:
+
+| Column | Type | Stable? | Purpose |
+| --- | --- | --- | --- |
+| `provider_id`, `model_id` | integer FK | ❌ reassigned on hard-delete, restore, schema re-seed | fast live JOINs |
+| `provider_uuid_at_probe`, `model_uuid_at_probe` | UUID snapshot | ✅ stable forever | historical reporting |
+| `provider_name_at_probe` | string snapshot | ⚠️ stable unless upstream renames | human-readable display |
+| `model_id_at_probe` | string snapshot | ⚠️ stable unless upstream renames | human-readable display |
+
+**When to use which:**
+
+- **Live dashboards, "current state" queries** → use the integer FKs.
+- **Historical reports, audit trails, cross-database restores** →
+  use the UUID snapshots. The integer FK may have been NULL'd
+  (`ON DELETE SET NULL` after hard-delete) or reassigned (after a
+  schema re-seed); the UUID snapshot still resolves the original
+  target via `find_provider_by_uuid()` / `find_model_by_uuid()`.
+
+**Why both?**
+
+The integer FK is convenient for the hot path (e.g. "give me all probe
+results for this provider") and supports the soft-delete pattern (a
+soft-deleted model row still has its old int PK, so `probe_results.model_id`
+is still valid and JOINable). The UUID snapshot is the safety net for
+when the int FK can no longer be trusted.
+
+**Backfill guarantee.** When a row is inserted via `record_outcome()`, the
+service code reads `provider.uuid_id` (and `model.uuid_id` if a model is
+present) and writes them to the snapshot columns. For migrations of
+existing data, `0158e57e3489` (initial) and `d4f8a2c6b1e3` (this one)
+backfill from the live FKs at migration time.
+
+**Hard-delete scenario.** If a model is hard-deleted (rare — usually only
+via direct DB intervention), `probe_results.model_id` becomes NULL via
+`ON DELETE SET NULL`, but `model_uuid_at_probe` remains on the row.
+`find_model_by_uuid()` then returns None (the entity is truly gone),
+but the **probe_result itself is preserved** so historical reports
+can still surface it as "model: gpt-4o (since-deleted, uuid: 8c…)".
+
+> ⚠️ The `Model.results` ORM relationship has `cascade="all, delete-orphan"`,
+> which means an ORM-level `session.delete(model)` removes the related
+> probe_results entirely (the DB's `ON DELETE SET NULL` never fires).
+> To preserve probe_results across a model hard-delete, use a raw SQL
+> `DELETE FROM models WHERE id = ?` — this bypasses the ORM cascade.
+
 ## Request flow (probe)
 
 ```

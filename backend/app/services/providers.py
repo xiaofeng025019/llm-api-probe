@@ -33,6 +33,22 @@ async def get_provider(
     return res.scalar_one_or_none()
 
 
+async def find_provider_by_uuid(
+    session: AsyncSession, provider_uuid: uuid.UUID, include_deleted: bool = True
+) -> Provider | None:
+    """Resolve a provider by its UUID snapshot.
+
+    Use this when cross-referencing a `probe_results.provider_uuid_at_probe`
+    back to the current `providers` row. Defaults to `include_deleted=True`
+    so historical probes of soft-deleted providers can still be
+    attributed.
+
+    Returns `None` if the provider was hard-deleted and no longer exists
+    in the table (the snapshot is the only remaining evidence).
+    """
+    return await get_provider(session, provider_uuid, include_deleted=include_deleted)
+
+
 async def create_provider(session: AsyncSession, data: ProviderCreate) -> Provider:
     """Create a new provider (uuid_id is auto-generated)."""
     p = Provider(

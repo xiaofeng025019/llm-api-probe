@@ -115,6 +115,12 @@ class ProbeResultOut(BaseModel):
     error_code: ErrorCode | None
     error_message: str | None
     checked_at: datetime
+    # UUID snapshots — stable target identifiers captured at probe time.
+    # Use these for historical reporting that must survive provider/model
+    # rename, soft-delete, hard-delete (the row is gone but the snapshot
+    # remains on this probe), or cross-database restore.
+    provider_uuid_at_probe: uuid.UUID
+    model_uuid_at_probe: uuid.UUID | None = None
 
 
 class DashboardFavoriteModel(BaseModel):

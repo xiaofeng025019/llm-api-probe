@@ -259,6 +259,7 @@ async def test_e2e_daily_cleanup_removes_old_and_disables_stale() -> None:
                 success=True,
                 latency_ms=10,
                 provider_name_at_probe=p.name,
+                provider_uuid_at_probe=p.uuid_id,
             )
             s.add(old)
             await s.flush()
@@ -270,6 +271,7 @@ async def test_e2e_daily_cleanup_removes_old_and_disables_stale() -> None:
                 success=True,
                 latency_ms=10,
                 provider_name_at_probe=p.name,
+                provider_uuid_at_probe=p.uuid_id,
             )
             s.add(new)
             await s.commit()

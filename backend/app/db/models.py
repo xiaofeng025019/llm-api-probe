@@ -124,6 +124,11 @@ class ProbeResult(Base):
             "checked_at",
         ),
         Index("ix_probe_results_checked_at", "checked_at"),
+        # Index the stable UUID snapshots so historical lookups
+        # ("find all probes for this provider UUID") stay fast even
+        # when the int FK has been reassigned.
+        Index("ix_probe_results_provider_uuid_at_probe", "provider_uuid_at_probe"),
+        Index("ix_probe_results_model_uuid_at_probe", "model_uuid_at_probe"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -139,23 +144,41 @@ class ProbeResult(Base):
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     checked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
-    # Snapshot fields - capture the state at probe time for historical integrity
+    # String snapshots — capture the upstream-visible identity at probe time.
+    # Useful for human display, log lines, and matching the model that
+    # the upstream provider was offering on the day of the probe.
     provider_name_at_probe: Mapped[str] = mapped_column(String(120))
     model_id_at_probe: Mapped[str | None] = mapped_column(String(300), nullable=True)
+
+    # UUID snapshots — stable identifiers for the *target* provider/model.
+    # These survive provider/model re-creation, schema migrations that
+    # reassign int PKs, and cross-database restores. Use these for any
+    # historical reporting or cross-referencing that must stay valid even
+    # if the int FK becomes NULL (model hard-deleted) or points to a
+    # different row (after a re-creation).
+    provider_uuid_at_probe: Mapped[uuid.UUID] = mapped_column(Uuid)
+    model_uuid_at_probe: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
 
     model: Mapped[Model | None] = relationship(back_populates="results")
     provider_rel: Mapped[Provider] = relationship(lazy="joined")
 
     @property
     def provider_uuid(self) -> uuid.UUID:
-        """Return the provider's uuid_id for API responses."""
-        assert self.provider_rel is not None
-        return self.provider_rel.uuid_id
+        """Return the provider's uuid_id for API responses.
+        Prefers the live FK, falls back to the snapshot for orphaned rows
+        (e.g. provider hard-deleted, FK CASCADEd)."""
+        if self.provider_rel is not None:
+            return self.provider_rel.uuid_id
+        return self.provider_uuid_at_probe
 
     @property
     def model_uuid(self) -> uuid.UUID | None:
-        """Return the model's uuid_id for API responses."""
-        return self.model.uuid_id if self.model else None
+        """Return the model's uuid_id for API responses.
+        Prefers the live FK, falls back to the snapshot for SET-NULL
+        rows (model hard-deleted)."""
+        if self.model is not None:
+            return self.model.uuid_id
+        return self.model_uuid_at_probe
 
 
 class Setting(Base):

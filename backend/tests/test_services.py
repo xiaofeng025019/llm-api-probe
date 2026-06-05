@@ -190,6 +190,196 @@ async def test_record_outcome_persists(session) -> None:
 
 
 @pytest.mark.asyncio
+async def test_record_outcome_populates_provider_uuid_snapshot(session) -> None:
+    """Every probe_result must snapshot the provider's UUID at probe time,
+    so historical reports survive provider rename / id reassignment."""
+    p = await providers_svc.create_provider(
+        session,
+        ProviderCreate(
+            name="p1",
+            kind=ProviderKind.openai,
+            base_url="https://api.openai.com",
+            api_key="k",
+        ),
+    )
+    out = await results_svc.record_outcome(
+        session, p, None, ProbeTarget.list_models,
+        ProbeOutcome(success=True, http_status=200, latency_ms=42),
+    )
+    assert out.provider_uuid_at_probe == p.uuid_id
+    # String snapshot also recorded for human display
+    assert out.provider_name_at_probe == "p1"
+
+
+@pytest.mark.asyncio
+async def test_record_outcome_populates_model_uuid_snapshot(session) -> None:
+    """Probes with a model must snapshot the model's UUID."""
+    p = await providers_svc.create_provider(
+        session,
+        ProviderCreate(
+            name="p1",
+            kind=ProviderKind.openai,
+            base_url="https://api.openai.com",
+            api_key="k",
+        ),
+    )
+    ms = await models_svc.upsert_discovered(
+        session, p.uuid_id, [DiscoveredModel(model_id="gpt-4o", type=ModelType.chat)]
+    )
+    model = ms[0]
+    out = await results_svc.record_outcome(
+        session, p, model.id, ProbeTarget.chat_completion,
+        ProbeOutcome(success=True, http_status=200, latency_ms=100),
+    )
+    assert out.model_uuid_at_probe == model.uuid_id
+    assert out.model_id_at_probe == "gpt-4o"
+
+
+@pytest.mark.asyncio
+async def test_record_outcome_model_uuid_is_null_for_list_models(session) -> None:
+    """list_models probes without a model row get model_uuid_at_probe = None."""
+    p = await providers_svc.create_provider(
+        session,
+        ProviderCreate(
+            name="p1",
+            kind=ProviderKind.openai,
+            base_url="https://api.openai.com",
+            api_key="k",
+        ),
+    )
+    out = await results_svc.record_outcome(
+        session, p, None, ProbeTarget.list_models,
+        ProbeOutcome(success=True, http_status=200, latency_ms=42),
+    )
+    assert out.model_uuid_at_probe is None
+    assert out.provider_uuid_at_probe == p.uuid_id
+
+
+@pytest.mark.asyncio
+async def test_snapshot_uuid_survives_provider_rename(session) -> None:
+    """If the provider's name changes after a probe, the probe_result's
+    UUID + name snapshots still point to the historical identity."""
+    p = await providers_svc.create_provider(
+        session,
+        ProviderCreate(
+            name="original-name",
+            kind=ProviderKind.openai,
+            base_url="https://api.openai.com",
+            api_key="k",
+        ),
+    )
+    out = await results_svc.record_outcome(
+        session, p, None, ProbeTarget.list_models,
+        ProbeOutcome(success=True, http_status=200, latency_ms=42),
+    )
+    # Now rename the provider
+    p.name = "renamed-name"
+    await session.commit()
+
+    # The snapshot fields still point to the *original* identity
+    assert out.provider_uuid_at_probe == p.uuid_id
+    assert out.provider_name_at_probe == "original-name"
+
+
+@pytest.mark.asyncio
+async def test_find_provider_by_uuid_resolves_snapshot(session) -> None:
+    """The find_by_uuid helper resolves a probe's provider_uuid_at_probe
+    back to the current provider row, even after soft-delete + restore."""
+    p = await providers_svc.create_provider(
+        session,
+        ProviderCreate(
+            name="p1",
+            kind=ProviderKind.openai,
+            base_url="https://api.openai.com",
+            api_key="k",
+        ),
+    )
+    out = await results_svc.record_outcome(
+        session, p, None, ProbeTarget.list_models,
+        ProbeOutcome(success=True, http_status=200, latency_ms=42),
+    )
+
+    # Soft-delete the provider
+    p.deleted_at = datetime.now(UTC)
+    await session.commit()
+
+    # Plain get_provider would NOT find it; find_provider_by_uuid should
+    found = await providers_svc.find_provider_by_uuid(session, out.provider_uuid_at_probe)
+    assert found is not None
+    assert found.uuid_id == p.uuid_id
+
+    plain = await providers_svc.get_provider(session, p.uuid_id, include_deleted=False)
+    assert plain is None  # confirms the contrast
+
+
+@pytest.mark.asyncio
+async def test_find_model_by_uuid_resolves_snapshot(session) -> None:
+    """find_model_by_uuid resolves probe's model_uuid_at_probe even if the
+    model is soft-deleted."""
+    p = await providers_svc.create_provider(
+        session,
+        ProviderCreate(
+            name="p1",
+            kind=ProviderKind.openai,
+            base_url="https://api.openai.com",
+            api_key="k",
+        ),
+    )
+    ms = await models_svc.upsert_discovered(
+        session, p.uuid_id, [DiscoveredModel(model_id="gpt-4o", type=ModelType.chat)]
+    )
+    model = ms[0]
+    out = await results_svc.record_outcome(
+        session, p, model.id, ProbeTarget.chat_completion,
+        ProbeOutcome(success=True, http_status=200, latency_ms=100),
+    )
+
+    # Soft-delete the model
+    model.deleted_at = datetime.now(UTC)
+    await session.commit()
+
+    found = await models_svc.find_model_by_uuid(session, out.model_uuid_at_probe)
+    assert found is not None
+    assert found.uuid_id == model.uuid_id
+
+
+@pytest.mark.asyncio
+async def test_snapshot_persists_through_soft_delete_and_restore(session) -> None:
+    """The UUID snapshot must allow attribution after a model is
+    soft-deleted, then re-appears (typical case: model re-offered by
+    upstream after being removed for a while)."""
+    from sqlalchemy import select
+    p = await providers_svc.create_provider(
+        session,
+        ProviderCreate(
+            name="p1",
+            kind=ProviderKind.openai,
+            base_url="https://api.openai.com",
+            api_key="k",
+        ),
+    )
+    ms = await models_svc.upsert_discovered(
+        session, p.uuid_id, [DiscoveredModel(model_id="gpt-4o", type=ModelType.chat)]
+    )
+    model = ms[0]
+    out = await results_svc.record_outcome(
+        session, p, model.id, ProbeTarget.chat_completion,
+        ProbeOutcome(success=True, http_status=200, latency_ms=100),
+    )
+    # Soft-delete the model (out of provider's offering for a while)
+    model.deleted_at = datetime.now(UTC)
+    await session.commit()
+    # Re-fetch fresh
+    out = await session.scalar(select(ProbeResult).where(ProbeResult.uuid_id == out.uuid_id))
+
+    # Snapshot still allows finding the model
+    found = await models_svc.find_model_by_uuid(session, out.model_uuid_at_probe)
+    assert found is not None
+    assert found.uuid_id == model.uuid_id
+    assert found.deleted_at is not None  # confirms we did find the soft-deleted row
+
+
+@pytest.mark.asyncio
 async def test_record_outcome_updates_confirmed_model_status(session) -> None:
     p = await providers_svc.create_provider(
         session,
@@ -435,7 +625,9 @@ async def test_dashboard_includes_favorite_model_status_details(session) -> None
             error_message="server failed",
             checked_at=base_now,
             provider_name_at_probe=p.name,
+            provider_uuid_at_probe=p.uuid_id,
             model_id_at_probe=fav.model_id,
+            model_uuid_at_probe=fav.uuid_id,
         )
     )
     session.add(
@@ -449,7 +641,9 @@ async def test_dashboard_includes_favorite_model_status_details(session) -> None
             ttfb_ms=40,
             checked_at=base_now + timedelta(seconds=1),
             provider_name_at_probe=p.name,
+            provider_uuid_at_probe=p.uuid_id,
             model_id_at_probe=fav.model_id,
+            model_uuid_at_probe=fav.uuid_id,
         )
     )
     session.add(
@@ -461,7 +655,9 @@ async def test_dashboard_includes_favorite_model_status_details(session) -> None
             latency_ms=50,
             checked_at=base_now + timedelta(seconds=2),
             provider_name_at_probe=p.name,
+            provider_uuid_at_probe=p.uuid_id,
             model_id_at_probe=other.model_id,
+            model_uuid_at_probe=other.uuid_id,
         )
     )
     fav.status = "online"
@@ -584,7 +780,9 @@ async def test_dashboard_favorites_delta_24h_ago(session) -> None:
             latency_ms=10,
             checked_at=base_old,
             provider_name_at_probe=p.name,
+            provider_uuid_at_probe=p.uuid_id,
             model_id_at_probe=ms[0].model_id,
+            model_uuid_at_probe=ms[0].uuid_id,
         )
     )
     session.add(
@@ -596,7 +794,9 @@ async def test_dashboard_favorites_delta_24h_ago(session) -> None:
             latency_ms=10,
             checked_at=base_old,
             provider_name_at_probe=p.name,
+            provider_uuid_at_probe=p.uuid_id,
             model_id_at_probe=ms[1].model_id,
+            model_uuid_at_probe=ms[1].uuid_id,
         )
     )
     session.add(
@@ -608,7 +808,9 @@ async def test_dashboard_favorites_delta_24h_ago(session) -> None:
             latency_ms=10,
             checked_at=base_now,
             provider_name_at_probe=p.name,
+            provider_uuid_at_probe=p.uuid_id,
             model_id_at_probe=ms[0].model_id,
+            model_uuid_at_probe=ms[0].uuid_id,
         )
     )
     session.add(
@@ -620,7 +822,9 @@ async def test_dashboard_favorites_delta_24h_ago(session) -> None:
             latency_ms=10,
             checked_at=base_now + timedelta(seconds=1),
             provider_name_at_probe=p.name,
+            provider_uuid_at_probe=p.uuid_id,
             model_id_at_probe=ms[1].model_id,
+            model_uuid_at_probe=ms[1].uuid_id,
         )
     )
     await session.commit()
