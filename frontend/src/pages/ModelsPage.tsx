@@ -4,11 +4,22 @@ import { formatRelative, modelTypeColor } from "../lib/format";
 import { api } from "../api/types";
 import { Icon } from "../components/Icons";
 import { withErrorToast } from "../lib/action";
+import { useT } from "../hooks/useT";
 
 const TYPES = ["all", "chat", "vision", "audio", "image", "embedding", "code"] as const;
+const TYPE_KEYS = {
+  all: "models.typeAll",
+  chat: "models.typeChat",
+  vision: "models.typeVision",
+  audio: "models.typeAudio",
+  image: "models.typeImage",
+  embedding: "models.typeEmbedding",
+  code: "models.typeCode",
+} as const;
 
 export function ModelsPage() {
   const { providers, modelsByProvider, refresh } = useDashboard();
+  const t = useT();
   const [filter, setFilter] = useState<(typeof TYPES)[number]>("all");
   const [search, setSearch] = useState("");
 
@@ -50,9 +61,9 @@ export function ModelsPage() {
 
   const typeCounts = useMemo(() => {
     const counts: Record<string, number> = { all: allFavorites.length };
-    for (const t of TYPES) {
-      if (t === "all") continue;
-      counts[t] = allFavorites.filter((r) => r.type === t).length;
+    for (const ty of TYPES) {
+      if (ty === "all") continue;
+      counts[ty] = allFavorites.filter((r) => r.type === ty).length;
     }
     return counts;
   }, [allFavorites]);
@@ -61,8 +72,8 @@ export function ModelsPage() {
     <div>
       <div className="page-header">
         <div>
-          <h1>Favorite Models</h1>
-          <div className="subtitle">{allFavorites.length} models under active monitoring</div>
+          <h1>{t("models.title")}</h1>
+          <div className="subtitle">{t("models.subtitle", { n: allFavorites.length })}</div>
         </div>
       </div>
 
@@ -81,27 +92,27 @@ export function ModelsPage() {
             <Icon.Search />
           </span>
           <input
-            placeholder="Search models…"
+            placeholder={t("models.searchPlaceholder")}
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             style={{ paddingLeft: 32 }}
-            aria-label="Search models"
+            aria-label={t("models.searchAria")}
             type="search"
           />
         </div>
-        <div className="window-tabs" role="tablist" aria-label="Filter by type">
-          {TYPES.map((t) => (
+        <div className="window-tabs" role="tablist" aria-label={t("models.typeFilter")}>
+          {TYPES.map((ty) => (
             <button
-              key={t}
-              className={filter === t ? "active" : ""}
-              onClick={() => setFilter(t)}
-              title={typeCounts[t] ? `${typeCounts[t]} items` : ""}
+              key={ty}
+              className={filter === ty ? "active" : ""}
+              onClick={() => setFilter(ty)}
+              title={typeCounts[ty] ? t("models.count", { n: typeCounts[ty] }) : ""}
               role="tab"
-              aria-selected={filter === t}
-              aria-label={`Type ${t} (${typeCounts[t] ?? 0} items)`}
+              aria-selected={filter === ty}
+              aria-label={t("models.typeAria", { type: t(TYPE_KEYS[ty]), n: typeCounts[ty] ?? 0 })}
             >
-              {t}
-              {typeCounts[t] > 0 && (
+              {t(TYPE_KEYS[ty])}
+              {typeCounts[ty] > 0 && (
                 <span
                   style={{
                     marginLeft: 6,
@@ -110,7 +121,7 @@ export function ModelsPage() {
                     fontWeight: 600,
                   }}
                 >
-                  {typeCounts[t]}
+                  {typeCounts[ty]}
                 </span>
               )}
             </button>
@@ -120,15 +131,15 @@ export function ModelsPage() {
 
       <div className="table-wrap">
         <table>
-          <caption className="sr-only">Favorite models</caption>
+          <caption className="sr-only">{t("models.column.caption")}</caption>
           <thead>
             <tr>
-              <th scope="col">Provider</th>
-              <th scope="col">Model</th>
-              <th scope="col">Type</th>
-              <th scope="col">Last seen</th>
+              <th scope="col">{t("models.column.provider")}</th>
+              <th scope="col">{t("models.column.model")}</th>
+              <th scope="col">{t("models.column.type")}</th>
+              <th scope="col">{t("models.column.lastSeen")}</th>
               <th style={{ width: 120 }} scope="col">
-                <span className="sr-only">Actions</span>
+                <span className="sr-only">{t("models.column.actions")}</span>
               </th>
             </tr>
           </thead>
@@ -154,13 +165,13 @@ export function ModelsPage() {
                     onClick={() =>
                       withErrorToast(
                         api.patchModel(r.model_id, { is_favorite: false }),
-                        "Unfavorite",
+                        t("models.unfavorite"),
                       ).then(refresh)
                     }
-                    aria-label={`Unfavorite ${r.model}`}
+                    aria-label={t("models.unfavoriteAria", { name: r.model })}
                   >
                     <Icon.Star filled />
-                    Unfavorite
+                    {t("models.unfavorite")}
                   </button>
                 </td>
               </tr>
@@ -172,11 +183,11 @@ export function ModelsPage() {
                     <div className="empty-state-icon">
                       <Icon.Star />
                     </div>
-                    <h3>No matching favorites</h3>
+                    <h3>{t("models.emptyTitle")}</h3>
                     <p>
                       {allFavorites.length === 0
-                        ? "Click the ★ on a model in the Provider detail or Dashboard to favorite it."
-                        : "Try a different filter or search term."}
+                        ? t("models.emptyNone")
+                        : t("models.emptyFilter")}
                     </p>
                   </div>
                 </td>

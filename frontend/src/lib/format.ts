@@ -1,3 +1,5 @@
+import { t as i18nT } from "./i18n";
+
 export function parseApiDate(iso: string): Date {
   // SQLite/FastAPI currently returns UTC timestamps without a timezone suffix
   // (for example "2026-06-04T07:28:13"). Browsers parse that as local time,
@@ -12,17 +14,17 @@ export function formatTime(iso: string | null | undefined): string {
 }
 
 export function formatRelative(iso: string | null | undefined): string {
-  if (!iso) return "never";
+  if (!iso) return i18nT("time.never");
   const diff = Date.now() - parseApiDate(iso).getTime();
   const sec = Math.floor(diff / 1000);
-  if (sec < 0) return "just now";
-  if (sec < 60) return `${sec}s ago`;
+  if (sec < 0) return i18nT("time.justNow");
+  if (sec < 60) return i18nT("time.secondsAgo", { n: sec });
   const min = Math.floor(sec / 60);
-  if (min < 60) return `${min}m ago`;
+  if (min < 60) return i18nT("time.minutesAgo", { n: min });
   const hr = Math.floor(min / 60);
-  if (hr < 24) return `${hr}h ago`;
+  if (hr < 24) return i18nT("time.hoursAgo", { n: hr });
   const day = Math.floor(hr / 24);
-  return `${day}d ago`;
+  return i18nT("time.daysAgo", { n: day });
 }
 
 export function statusColor(status: "ok" | "degraded" | "fail" | null | undefined): string {
@@ -41,14 +43,14 @@ export function modelHealthClass(status: string | null | undefined, enabled = tr
 }
 
 export function modelHealthLabel(status: string | null | undefined, enabled = true): string {
-  if (!enabled) return "disabled";
-  if (status === "online") return "online";
-  if (status === "suspect") return "suspect";
-  if (status === "offline") return "offline";
-  if (status === "rate_limited") return "rate limited";
-  if (status === "unauthorized") return "unauthorized";
-  if (status === "not_found") return "not found";
-  return "unknown";
+  if (!enabled) return i18nT("status.disabled");
+  if (status === "online") return i18nT("status.online");
+  if (status === "suspect") return i18nT("status.suspect");
+  if (status === "offline") return i18nT("status.offline");
+  if (status === "rate_limited") return i18nT("status.rateLimited");
+  if (status === "unauthorized") return i18nT("status.unauthorized");
+  if (status === "not_found") return i18nT("status.notFound");
+  return i18nT("common.unknown");
 }
 
 export function modelTypeColor(type: string): string {

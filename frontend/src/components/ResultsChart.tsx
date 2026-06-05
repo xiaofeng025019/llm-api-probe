@@ -11,6 +11,7 @@ import {
 import type { ProbeResult } from "../api/types";
 import { parseApiDate } from "../lib/format";
 import { useTheme } from "../hooks/useTheme";
+import { useT } from "../hooks/useT";
 
 interface Point {
   t: number;
@@ -20,6 +21,7 @@ interface Point {
 
 export function ResultsChart({ results }: { results: ProbeResult[] }) {
   const [theme] = useTheme();
+  const t = useT();
   const isDark = theme === "dark";
 
   // Theme-aware colors
@@ -41,7 +43,7 @@ export function ResultsChart({ results }: { results: ProbeResult[] }) {
   );
 
   if (data.length === 0) {
-    return <div className="muted">No probe data in this time window yet.</div>;
+    return <div className="muted">{t("chart.empty")}</div>;
   }
 
   return (
@@ -61,7 +63,7 @@ export function ResultsChart({ results }: { results: ProbeResult[] }) {
             yAxisId="lat"
             stroke={axisColor}
             fontSize={11}
-            label={{ value: "ms", angle: -90, position: "insideLeft", fill: axisColor }}
+            label={{ value: t("chart.axisMs"), angle: -90, position: "insideLeft", fill: axisColor }}
           />
           <YAxis
             yAxisId="ok"
@@ -78,8 +80,12 @@ export function ResultsChart({ results }: { results: ProbeResult[] }) {
               fontSize: 12,
             }}
             formatter={(value: number | string, name: string) => {
-              if (name === "latency") return [`${value}ms`, "Latency"];
-              if (name === "success") return [value === 1 ? "ok" : "fail", "Status"];
+              if (name === "latency") return [`${value}ms`, t("chart.tooltipLatency")];
+              if (name === "success")
+                return [
+                  value === 1 ? t("chart.ok") : t("chart.fail"),
+                  t("chart.tooltipStatus"),
+                ];
               return [value, name];
             }}
           />

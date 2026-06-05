@@ -274,6 +274,62 @@ main {
   border-color: var(--border-strong);
 }
 
+.language-toggle-wrap {
+  position: relative;
+}
+
+.language-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  box-shadow: var(--shadow-md);
+  min-width: 140px;
+  z-index: 100;
+  animation: language-menu-in 0.12s var(--ease);
+}
+
+@keyframes language-menu-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.language-menu button {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: transparent;
+  color: var(--text);
+  border: 0;
+  padding: 8px 12px;
+  border-radius: var(--r-sm);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  text-align: left;
+  transition: background-color var(--dur) var(--ease);
+}
+
+.language-menu button:hover {
+  background: var(--bg-hover);
+}
+
+.language-menu button.active {
+  color: var(--primary);
+  font-weight: 600;
+}
+
+.language-menu-check {
+  color: var(--primary);
+  font-size: 12px;
+}
+
 /* ---------- buttons ------------------------------------------------------ */
 
 button {

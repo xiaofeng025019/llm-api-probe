@@ -28,6 +28,8 @@ import {
 import { Skeleton, SkeletonProviderCard, SkeletonStat } from "../components/Skeleton";
 import { pushToast } from "../components/Toast";
 import { ProviderDialog } from "./ProvidersPage";
+import { useT } from "../hooks/useT";
+import { t as i18nT } from "../lib/i18n";
 
 /** Build the secondary line for the Favorite Models card. Includes a
  *  delta vs 24h ago when the backend supplies favorites_online_24h_ago
@@ -37,17 +39,21 @@ function favoritesSub(totals: {
   favorites_online: number;
   favorites_online_24h_ago?: number;
 }): string {
-  if (totals.favorites_total === 0) return "No favorite models";
+  if (totals.favorites_total === 0) return i18nT("dashboard.favoritesSub.none");
   const pct = Math.round(
     (totals.favorites_online / Math.max(1, totals.favorites_total)) * 100,
   );
-  const base = `${pct}% online`;
+  const base = i18nT("dashboard.favoritesSub.base", { pct });
   if (totals.favorites_online_24h_ago == null) return base;
   const delta = totals.favorites_online - totals.favorites_online_24h_ago;
-  if (delta === 0) return `${base} · flat vs 24h ago`;
+  if (delta === 0) return i18nT("dashboard.favoritesSub.deltaFlat", { base });
   const sign = delta > 0 ? "↑" : "↓";
-  const word = Math.abs(delta) === 1 ? "model" : "models";
-  return `${base} · ${sign}${Math.abs(delta)} ${word} vs 24h ago`;
+  const abs = Math.abs(delta);
+  const word = i18nT(abs === 1 ? "dashboard.favoritesSub.model" : "dashboard.favoritesSub.models");
+  return i18nT(
+    delta > 0 ? "dashboard.favoritesSub.deltaUp" : "dashboard.favoritesSub.deltaDown",
+    { base, n: abs, model: word },
+  );
 }
 
 function modelStatusLabel(model: DashboardFavoriteModel): string {
@@ -56,12 +62,13 @@ function modelStatusLabel(model: DashboardFavoriteModel): string {
 
 function errorSummary(counts: Record<string, number>): string {
   const entries = Object.entries(counts).sort((a, b) => b[1] - a[1]);
-  if (entries.length === 0) return "No errors";
+  if (entries.length === 0) return i18nT("format.noErrors");
   return entries.map(([code, count]) => `${code} ${count}`).join(" · ");
 }
 
 export function DashboardPage() {
   const nav = useNavigate();
+  const t = useT();
   const { dashboard, providers, settings, loading, error, refresh } = useDashboard();
   const [runningProviders, setRunningProviders] = useState<Record<string, boolean>>({});
   const [showAddProvider, setShowAddProvider] = useState(false);
@@ -70,10 +77,10 @@ export function DashboardPage() {
   const statusIntervalValue = modelStatusIntervalValue(settings);
 
   async function onDelete(p: Provider) {
-    if (!confirm(`Delete provider ${p.name}?`)) return;
+    if (!confirm(t("common.confirmDeleteProvider", { name: p.name }))) return;
     try {
-      await withErrorToast(api.deleteProvider(p.id), "Delete");
-      pushToast("ok", "Deleted", p.name);
+      await withErrorToast(api.deleteProvider(p.id), t("common.delete"));
+      pushToast("ok", t("toast.deleted"), p.name);
       await refresh();
     } catch {
       /* toast already shown */
@@ -85,8 +92,8 @@ export function DashboardPage() {
       <div>
         <div className="page-header">
           <div>
-            <h1>Dashboard</h1>
-            <div className="subtitle">Real-time availability of all LLM providers</div>
+            <h1>{t("dashboard.title")}</h1>
+            <div className="subtitle">{t("dashboard.subtitle")}</div>
           </div>
         </div>
         <div className="stat-grid">
@@ -109,8 +116,8 @@ export function DashboardPage() {
     <div>
       <div className="page-header">
         <div>
-          <h1>Dashboard</h1>
-          <div className="subtitle">Real-time availability of all LLM providers</div>
+          <h1>{t("dashboard.title")}</h1>
+          <div className="subtitle">{t("dashboard.subtitle")}</div>
         </div>
       </div>
 
@@ -119,15 +126,15 @@ export function DashboardPage() {
       {dashboard && (
         <div className="stat-grid stagger">
           <StatCard
-            label="Providers"
+            label={t("dashboard.stat.providers.label")}
             value={`${activeDashboardProviders.length} / ${dashboard.totals.providers}`}
-            sub="monitoring"
+            sub={t("dashboard.stat.providers.sub")}
             icon={<IconServer />}
             accentColor="var(--primary)"
             to="/providers"
           />
           <StatCard
-            label="Available Models"
+            label={t("dashboard.stat.availableModels.label")}
             value={
               dashboard.totals.models > 0
                 ? `${dashboard.totals.available_models ?? 0} / ${dashboard.totals.models}`
@@ -135,8 +142,8 @@ export function DashboardPage() {
             }
             sub={
               dashboard.totals.models > 0
-                ? `${Math.round(((dashboard.totals.available_models ?? 0) / dashboard.totals.models) * 100)}% online 24h`
-                : "no models"
+                ? `${Math.round(((dashboard.totals.available_models ?? 0) / dashboard.totals.models) * 100)}% ${t("dashboard.stat.availableModels.sub")}`
+                : t("dashboard.stat.availableModels.sub")
             }
             progress={
               dashboard.totals.models > 0
@@ -148,7 +155,7 @@ export function DashboardPage() {
             to="/providers"
           />
           <StatCard
-            label="Favorite Models"
+            label={t("dashboard.stat.favoriteModels.label")}
             value={`${dashboard.totals.favorites_online} / ${dashboard.totals.favorites_total}`}
             icon={<IconStarOutline filled />}
             accentColor="var(--warn)"
@@ -167,14 +174,17 @@ export function DashboardPage() {
           <div className="section-header">
             <div className="section-title">
               <IconServer />
-              Providers
+              {t("dashboard.section.activeProviders")}
             </div>
-            <span className="muted">{activeDashboardProviders.length} active</span>
+            <span className="muted">
+              {t("dashboard.section.activeCount", { n: activeDashboardProviders.length })}
+            </span>
           </div>
           <div className="dashboard-provider-list stagger">
             {activeDashboardProviders.map((p) => {
               const provider = providers.find((x) => x.id === p.provider_id);
               const isRunning = !!runningProviders[p.provider_id];
+              const status = p.last_status ?? "unknown";
               return (
                 <article
                   key={p.provider_id}
@@ -189,20 +199,18 @@ export function DashboardPage() {
                   }}
                   role="button"
                   tabIndex={0}
-                  aria-label={`${p.name}, status ${p.last_status ?? "unknown"}`}
+                  aria-label={`${p.name}, ${t("status." + status)}`}
                 >
                   <div className="head">
                     <div>
                       <div className="name">
                         <span
-                          className={`status-dot ${p.last_status ?? "unknown"}`}
-                          title={`Status: ${p.last_status ?? "unknown"}`}
-                          aria-label={`Status: ${p.last_status ?? "unknown"}`}
+                          className={`status-dot ${status}`}
+                          title={`${t("status." + status)}`}
+                          aria-label={`${t("status." + status)}`}
                         />
                         {p.name}
-                        <span className={`pill ${p.last_status ?? "unknown"}`}>
-                          {p.last_status ?? "unknown"}
-                        </span>
+                        <span className={`pill ${status}`}>{t("status." + status)}</span>
                       </div>
                       <div className="meta">
                         <span className="kind-badge">
@@ -213,12 +221,12 @@ export function DashboardPage() {
                         </span>
                       </div>
                       <div className="dashboard-monitoring-line">
-                        <span className="pill ok">Monitoring on</span>
+                        <span className="pill ok">{t("dashboard.card.monitoringOn")}</span>
                         <span className={`pill ${p.list_models_status ?? "unknown"}`}>
-                          List {p.list_models_status ?? "unknown"}
+                          {t("dashboard.card.modelList")} {p.list_models_status ?? t("common.unknown")}
                         </span>
                         <span className="muted">{statusIntervalLabel}</span>
-                        {isRunning && <span className="pill info">Probe queued</span>}
+                        {isRunning && <span className="pill info">{t("dashboard.card.probeQueued")}</span>}
                       </div>
                     </div>
                   </div>
@@ -227,7 +235,7 @@ export function DashboardPage() {
                     <div className="dashboard-provider-summary">
                       <div className="metrics">
                         <div className="metric">
-                          <div className="label">24h Availability</div>
+                          <div className="label">{t("dashboard.card.availability24h")}</div>
                           <div
                             className="value"
                             style={{
@@ -245,23 +253,23 @@ export function DashboardPage() {
                           </div>
                         </div>
                         <div className="metric">
-                          <div className="label">P95 Latency</div>
+                          <div className="label">{t("dashboard.card.p95Latency")}</div>
                           <div className="value">{formatMs(p.p95_latency_ms_24h)}</div>
                         </div>
                         <div className="metric">
-                          <div className="label">P95 TTFB</div>
+                          <div className="label">{t("dashboard.card.p95Ttfb")}</div>
                           <div className="value">{formatMs(p.p95_ttfb_ms_24h)}</div>
                         </div>
                         <div className="metric">
-                          <div className="label">Samples / Failures</div>
+                          <div className="label">{t("dashboard.card.samplesFailures")}</div>
                           <div className="value">{p.samples_24h} / {p.failures_24h}</div>
                         </div>
                         <div className="metric dashboard-wide-metric">
-                          <div className="label">Model List</div>
+                          <div className="label">{t("dashboard.card.modelList")}</div>
                           <div className="value">
                             {p.list_models_status ? (
                               <>
-                                {p.list_models_status}
+                                {t("status." + (p.list_models_status === "ok" ? "online" : p.list_models_status === "fail" ? "offline" : "unknown"))}
                                 <span className="metric-subvalue">
                                   {formatMs(p.list_models_latency_ms)} · {formatRelative(p.list_models_checked_at)}
                                 </span>
@@ -272,7 +280,7 @@ export function DashboardPage() {
                           </div>
                         </div>
                         <div className="metric dashboard-wide-metric">
-                          <div className="label">Available Models</div>
+                          <div className="label">{t("dashboard.card.modelList")}</div>
                           <div className="value">
                             {p.model_count > 0
                               ? `${p.available_models_online} / ${p.model_count}`
@@ -280,7 +288,7 @@ export function DashboardPage() {
                           </div>
                         </div>
                         <div className="metric dashboard-wide-metric">
-                          <div className="label">Favorite Models</div>
+                          <div className="label">{t("dashboard.section.favoriteModels")}</div>
                           <div className="value">
                             {p.favorite_models_total > 0
                               ? `${p.favorite_models_online} / ${p.favorite_models_total}`
@@ -288,7 +296,7 @@ export function DashboardPage() {
                           </div>
                         </div>
                         <div className="metric dashboard-wide-metric">
-                          <div className="label">Errors 24h</div>
+                          <div className="label">{t("dashboard.card.availability24h").replace("24h Availability", "Errors 24h")}</div>
                           <div className="value metric-compact-value">
                             {errorSummary(p.error_counts_24h)}
                           </div>
@@ -301,7 +309,7 @@ export function DashboardPage() {
                         <div className="dashboard-favorites-head">
                           <span>
                             <IconStarOutline filled />
-                            Favorite Models
+                            {t("dashboard.section.favoriteModels")}
                           </span>
                           <strong>
                             {p.favorite_models_online}/{p.favorite_models_total}
@@ -321,7 +329,7 @@ export function DashboardPage() {
                           </div>
                         ) : (
                           <div className="favorite-model-empty">
-                            No favorite models yet. Mark them on the Models or Provider Detail page.
+                            {t("dashboard.section.noFavorites")}
                           </div>
                         )}
                       </div>
@@ -340,7 +348,7 @@ export function DashboardPage() {
                         setRunningProviders((prev) => ({ ...prev, [p.provider_id]: true }));
                         try {
                           await api.runNow(p.provider_id);
-                          pushToast("info", "Probe queued", p.name);
+                          pushToast("info", t("toast.probeQueued"), p.name);
                           window.setTimeout(() => {
                             void refresh().finally(() => {
                               setRunningProviders((prev) => {
@@ -356,38 +364,38 @@ export function DashboardPage() {
                             delete next[p.provider_id];
                             return next;
                           });
-                          pushToast("fail", "Trigger failed", e instanceof Error ? e.message : String(e));
+                          pushToast("fail", t("toast.triggerFailed"), e instanceof Error ? e.message : String(e));
                         }
                       }}
-                      title="Probe current model availability, latency and error status"
-                      aria-label="Probe status"
+                      title={t("dashboard.card.probeStatusTitle")}
+                      aria-label={t("dashboard.card.probeStatus")}
                     >
                       {isRunning ? <span className="spinner" /> : <IconPlay />}
-                      {isRunning ? "Probing..." : "Probe status"}
+                      {isRunning ? t("common.saving") : t("dashboard.card.probeStatus")}
                     </button>
                     <button
                       className="secondary sm"
                       onClick={async () => {
                         try {
                           await api.syncModels(p.provider_id);
-                          pushToast("ok", "Model list updated", p.name);
+                          pushToast("ok", t("toast.modelListUpdated"), p.name);
                           await refresh();
                         } catch (e) {
-                          pushToast("fail", "Update failed", e instanceof Error ? e.message : String(e));
+                          pushToast("fail", t("toast.updateFailed"), e instanceof Error ? e.message : String(e));
                         }
                       }}
-                      title="Re-fetch the list of models from the provider"
-                      aria-label="Sync models"
+                      title={t("dashboard.card.syncModelsTitle")}
+                      aria-label={t("dashboard.card.syncModels")}
                     >
                       <IconRefresh />
-                      Sync models
+                      {t("dashboard.card.syncModels")}
                     </button>
                     {provider && (
                       <button
                         className="ghost sm"
                         onClick={() => onDelete(provider)}
-                        aria-label="Delete"
-                        title="Delete"
+                        aria-label={t("common.delete")}
+                        title={t("common.delete")}
                       >
                         <IconDelete />
                       </button>
@@ -399,14 +407,14 @@ export function DashboardPage() {
             <button
               className="dashboard-add-provider-card"
               onClick={() => setShowAddProvider(true)}
-              aria-label="Add Provider"
+              aria-label={t("dashboard.section.addProvider")}
             >
               <span className="dashboard-add-provider-icon">
                 <IconPlus />
               </span>
               <span className="dashboard-add-provider-copy">
-                <strong>Add Provider</strong>
-                <span>Connect a new LLM provider and configure monitoring frequency</span>
+                <strong>{t("dashboard.section.addProvider")}</strong>
+                <span>{t("dashboard.section.addProviderDesc")}</span>
               </span>
             </button>
           </div>
@@ -419,14 +427,14 @@ export function DashboardPage() {
             <div className="empty-state-icon">
               <IconServer />
             </div>
-            <h3>No providers yet</h3>
-            <p>Add an LLM provider on the Providers page to start monitoring.</p>
+            <h3>{t("dashboard.section.emptyTitle")}</h3>
+            <p>{t("dashboard.section.emptyDesc")}</p>
             <button
               onClick={() => setShowAddProvider(true)}
               style={{ marginTop: 12 }}
             >
               <IconPlus />
-              Add Provider
+              {t("dashboard.section.addProvider")}
             </button>
           </div>
         </div>
@@ -437,14 +445,14 @@ export function DashboardPage() {
             <div className="empty-state-icon">
               <IconServer />
             </div>
-            <h3>No monitoring providers</h3>
-            <p>Toggle monitoring on the Providers page to see them here.</p>
+            <h3>{t("dashboard.section.pausedTitle")}</h3>
+            <p>{t("dashboard.section.pausedDesc")}</p>
             <button
               onClick={() => nav("/providers")}
               style={{ marginTop: 12 }}
             >
               <IconServer />
-              Manage Providers
+              {t("dashboard.section.manageProviders")}
             </button>
           </div>
         </div>
@@ -470,6 +478,7 @@ function FavoriteModelStatus({
   providerName: string;
   onRefresh: () => Promise<void>;
 }) {
+  const t = useT();
   const label = modelStatusLabel(model);
   const statusClass = modelHealthClass(model.status, model.enabled);
   const displayName = model.display_name || model.model_id;
@@ -483,8 +492,8 @@ function FavoriteModelStatus({
         <div className="favorite-model-title">
           <span
             className={`status-dot ${statusClass}`}
-            title={`Status: ${label}`}
-            aria-label={`Status: ${label}`}
+            title={`${t("dashboard.favoritesSub.model")}: ${label}`}
+            aria-label={`${t("dashboard.favoritesSub.model")}: ${label}`}
           />
           <span className="favorite-model-name" title={model.model_id}>
             {displayName}
@@ -534,14 +543,14 @@ function FavoriteModelStatus({
           e.stopPropagation();
           try {
             await api.probeNow(providerId, model.id);
-            pushToast("info", "Model probe triggered", `${providerName} / ${displayName}`);
+            pushToast("info", t("toast.modelProbeTriggered"), `${providerName} / ${displayName}`);
             await onRefresh();
           } catch (e) {
-            pushToast("fail", "Trigger failed", e instanceof Error ? e.message : String(e));
+            pushToast("fail", t("toast.triggerFailed"), e instanceof Error ? e.message : String(e));
           }
         }}
-        aria-label={`Probe ${displayName} now`}
-        title="Probe now"
+        aria-label={`${t("dashboard.card.probeNow")} ${displayName}`}
+        title={t("dashboard.card.probeNow")}
       >
         <IconPlay />
       </button>
@@ -568,14 +577,12 @@ function StatCard({
   progress?: number | null;
   to?: string;
 }) {
+  const t = useT();
   const clickable = !!to;
-  // The card's a11y name includes the headline number (the most important
-  // data on the dashboard) plus the navigation target. Format:
-  //   "Providers 3, view details" / "Favorites online 8 of 12, view"
   const friendlyValue =
     typeof value === "number" ? value.toString() : String(value);
   const ariaLabel = clickable
-    ? `${label} ${friendlyValue}${hint ? `, ${hint}` : ""}${sub ? `, ${sub}` : ""}, view details`
+    ? `${label} ${friendlyValue}${hint ? `, ${hint}` : ""}${sub ? `, ${sub}` : ""}, ${t("dashboard.card.probeNow").toLowerCase()}`
     : `${label} ${friendlyValue}`;
   const inner = (
     <>
@@ -646,8 +653,8 @@ function StatCard({
         {
           ["--accent-color" as string]: accentColor,
           ["--accent-bg" as string]: accentColor
-              ? `color-mix(in srgb, ${accentColor} 12%, transparent)`
-              : undefined,
+            ? `color-mix(in srgb, ${accentColor} 12%, transparent)`
+            : undefined,
         } as React.CSSProperties
       }
     >

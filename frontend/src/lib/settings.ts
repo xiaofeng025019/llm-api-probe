@@ -1,5 +1,6 @@
 import type { Setting } from "../api/types";
 import { formatInterval } from "./format";
+import { t as i18nT } from "./i18n";
 
 export const FAVORITE_MODEL_INTERVAL_KEY = "favorite_model_interval_seconds";
 export const REGULAR_MODEL_INTERVAL_KEY = "regular_model_interval_seconds";
@@ -33,7 +34,11 @@ export function modelStatusIntervals(settings: Setting[]): {
 
 export function modelStatusIntervalLabel(settings: Setting[]): string {
   const intervals = modelStatusIntervals(settings);
-  return `Favorites ${formatInterval(intervals.favorite)} · Others ${formatInterval(intervals.regular)}`;
+  return i18nT("settings.interval.join", {
+    a: `${i18nT("settings.interval.favoritePrefix")} ${formatInterval(intervals.favorite)}`,
+    sep: i18nT("settings.interval.separator"),
+    b: `${i18nT("settings.interval.otherPrefix")} ${formatInterval(intervals.regular)}`,
+  });
 }
 
 export function modelStatusIntervalValue(settings: Setting[]): string {

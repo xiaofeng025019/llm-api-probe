@@ -7,18 +7,21 @@ import { modelStatusIntervalLabel } from "../lib/settings";
 import { Icon } from "../components/Icons";
 import { withErrorToast } from "../lib/action";
 import { pushToast } from "../components/Toast";
+import { useT } from "../hooks/useT";
+import { t as i18nT } from "../lib/i18n";
 
 type StatusFilter = "all" | "ok" | "fail";
 type FavoriteFilter = "all" | "favorites";
 
 function errorSummary(counts: Record<string, number>): string {
   const entries = Object.entries(counts).sort((a, b) => b[1] - a[1]);
-  if (entries.length === 0) return "No errors";
+  if (entries.length === 0) return i18nT("format.noErrors");
   return entries.map(([code, count]) => `${code} ${count}`).join(" · ");
 }
 
 export function ProvidersPage() {
   const nav = useNavigate();
+  const t = useT();
   const { providers, dashboard, modelsByProvider, settings, refresh } = useDashboard();
   const [showAdd, setShowAdd] = useState(false);
   const [editing, setEditing] = useState<Provider | null>(null);
@@ -42,17 +45,12 @@ export function ProvidersPage() {
       : "all";
 
   function setStatus(s: StatusFilter) {
-    // Functional updater: never lose a same-tick update to a stale closure.
-    setParams(
-      (prev) => {
-        const next = new URLSearchParams(prev);
-        if (s === "all") next.delete("status");
-        else next.set("status", s);
-        return next;
-      },
-      // No replace: keep history so browser-back returns to the previous
-      // filter (matches native <select> and tab UX).
-    );
+    setParams((prev) => {
+      const next = new URLSearchParams(prev);
+      if (s === "all") next.delete("status");
+      else next.set("status", s);
+      return next;
+    });
   }
   function setFav(f: FavoriteFilter) {
     setParams((prev) => {
@@ -67,8 +65,15 @@ export function ProvidersPage() {
     const nextEnabled = !p.enabled;
     setTogglingProviders((prev) => ({ ...prev, [p.id]: true }));
     try {
-      await withErrorToast(api.patchProvider(p.id, { enabled: nextEnabled }), "Toggle monitoring");
-      pushToast("ok", nextEnabled ? "Monitoring enabled" : "Monitoring paused", p.name);
+      await withErrorToast(
+        api.patchProvider(p.id, { enabled: nextEnabled }),
+        t("dashboard.card.probeStatus").replace("Probe status", "Toggle monitoring"),
+      );
+      pushToast(
+        "ok",
+        nextEnabled ? t("toast.monitoringOn") : t("toast.monitoringOff"),
+        p.name,
+      );
       await refresh();
     } catch {
       /* toast already shown */
@@ -82,12 +87,10 @@ export function ProvidersPage() {
   }
 
   const lastStatusById = useMemo(
-    () => Object.fromEntries(
-      (dashboard?.providers ?? []).map((p) => [p.provider_id, p.last_status]),
-    ),
-    // Depend on the providers array reference, not the whole `dashboard`
-    // object — the dashboard is a new ref on every refresh (new {}), which
-    // would invalidate this memo unnecessarily on every SSE tick.
+    () =>
+      Object.fromEntries(
+        (dashboard?.providers ?? []).map((p) => [p.provider_id, p.last_status]),
+      ),
     [dashboard?.providers],
   );
 
@@ -114,32 +117,28 @@ export function ProvidersPage() {
     <div>
       <div className="page-header">
         <div>
-          <h1>Providers</h1>
-          <div className="subtitle">Manage LLM providers and probe configuration</div>
+          <h1>{t("providers.title")}</h1>
+          <div className="subtitle">{t("providers.subtitle")}</div>
         </div>
         <div className="toolbar" style={{ margin: 0 }}>
           <button onClick={() => setShowAdd(true)}>
             <Icon.Plus />
-            Add Provider
+            {t("providers.addProvider")}
           </button>
         </div>
       </div>
 
       <div className="toolbar" style={{ marginBottom: 16 }}>
         <span className="muted" style={{ fontSize: 12 }}>
-          Filter:
+          {t("providers.filter")}
         </span>
-        <div
-          className="window-tabs"
-          role="toolbar"
-          aria-label="Filter by status"
-        >
+        <div className="window-tabs" role="toolbar" aria-label="Filter by status">
           {(
             [
-              { v: "all", label: "All" },
-              { v: "ok", label: "OK" },
-              { v: "fail", label: "Failing" },
-            ] as { v: StatusFilter; label: string }[]
+              { v: "all" as const, label: t("providers.statusAll") },
+              { v: "ok" as const, label: t("providers.statusOk") },
+              { v: "fail" as const, label: t("providers.statusFail") },
+            ]
           ).map((opt) => (
             <button
               key={opt.v}
@@ -152,16 +151,12 @@ export function ProvidersPage() {
             </button>
           ))}
         </div>
-        <div
-          className="window-tabs"
-          role="toolbar"
-          aria-label="Filter by favorites"
-        >
+        <div className="window-tabs" role="toolbar" aria-label="Filter by favorites">
           {(
             [
-              { v: "all", label: "All models" },
-              { v: "favorites", label: "★ Favorites" },
-            ] as { v: FavoriteFilter; label: string }[]
+              { v: "all" as const, label: t("providers.favAll") },
+              { v: "favorites" as const, label: t("providers.favOnly") },
+            ]
           ).map((opt) => (
             <button
               key={opt.v}
@@ -176,12 +171,15 @@ export function ProvidersPage() {
         </div>
         <span className="grow" />
         <span className="muted" style={{ fontSize: 12 }}>
-          Showing {filtered.length} / {totalUnfiltered}
+          {t("providers.showing", { shown: filtered.length, total: totalUnfiltered })}
         </span>
         {hasFilter && (
-          <button className="ghost sm" onClick={() => setParams(new URLSearchParams(), { replace: true })}>
+          <button
+            className="ghost sm"
+            onClick={() => setParams(new URLSearchParams(), { replace: true })}
+          >
             <Icon.Close />
-            Clear filter
+            {t("providers.clearFilter")}
           </button>
         )}
       </div>
@@ -192,11 +190,11 @@ export function ProvidersPage() {
             <div className="empty-state-icon">
               <Icon.Server />
             </div>
-            <h3>No providers yet</h3>
-            <p>Add your first LLM provider to start monitoring.</p>
+            <h3>{t("providers.emptyTitle")}</h3>
+            <p>{t("providers.emptyDesc")}</p>
             <button onClick={() => setShowAdd(true)} style={{ marginTop: 12 }}>
               <Icon.Plus />
-              Add Provider
+              {t("providers.addProvider")}
             </button>
           </div>
         </div>
@@ -206,23 +204,19 @@ export function ProvidersPage() {
             <div className="empty-state-icon">
               <Icon.Filter />
             </div>
-            <h3>No matching providers</h3>
-            <p>Try adjusting or clearing your filters.</p>
+            <h3>{t("providers.emptyFilteredTitle")}</h3>
+            <p>{t("providers.emptyFilteredDesc")}</p>
             <button
               className="secondary"
               onClick={() => setParams(new URLSearchParams(), { replace: true })}
               style={{ marginTop: 12 }}
             >
-              Clear filter
+              {t("providers.clearFilter")}
             </button>
           </div>
         </div>
       ) : (
-        <div
-          className="provider-grid stagger"
-          role="list"
-          aria-label="Providers"
-        >
+        <div className="provider-grid stagger" role="list" aria-label={t("providers.title")}>
           {filtered.map((p) => {
             const dash = dashboard?.providers.find((d) => d.provider_id === p.id);
             const models = modelsByProvider[p.id] ?? [];
@@ -244,25 +238,26 @@ export function ProvidersPage() {
                 }}
                 role="button"
                 tabIndex={0}
-                aria-label={`${p.name}, status ${status ?? "unknown"}`}
+                aria-label={`${p.name}, ${t("dashboard.card.modelList")} ${status ?? t("common.unknown")}`}
               >
                 <div className="head">
                   <div>
                     <div className="name">
                       <span
                         className={`status-dot ${status ?? "unknown"}`}
-                        title={`Status: ${status ?? "unknown"}`}
-                        aria-label={`Status: ${status ?? "unknown"}`}
+                        title={t("dashboard.card.modelList") + ": " + (status ?? t("common.unknown"))}
+                        aria-label={t("dashboard.card.modelList") + ": " + (status ?? t("common.unknown"))}
                       />
                       {p.name}
                       <span className={`pill ${status ?? "unknown"}`}>
-                        {status ?? "unknown"}
+                        {status ?? t("common.unknown")}
                       </span>
                     </div>
                     <div className="meta">
                       <span className="kind-badge">{p.kind}</span>
                       <span style={{ marginLeft: 8 }}>
-                        {models.length} models · list every {p.interval_seconds}s
+                        {models.length} {t("dashboard.card.modelList")} ·{" "}
+                        {t("providers.card.listEvery", { n: p.interval_seconds })}
                       </span>
                     </div>
                     <div className="dashboard-monitoring-line">
@@ -270,25 +265,37 @@ export function ProvidersPage() {
                         className={`monitoring-switch ${isToggling ? "busy" : ""}`}
                         onClick={(e) => e.stopPropagation()}
                         onKeyDown={(e) => e.stopPropagation()}
-                        title={p.enabled ? "Pause auto-monitoring" : "Start auto-monitoring"}
+                        title={
+                          p.enabled
+                            ? t("providers.card.monitorTitleOn")
+                            : t("providers.card.monitorTitleOff")
+                        }
                       >
                         <input
                           type="checkbox"
                           checked={p.enabled}
                           disabled={isToggling}
                           onChange={() => void toggleMonitoring(p)}
-                          aria-label={`${p.enabled ? "Pause" : "Start"} auto-monitoring for ${p.name}`}
+                          aria-label={
+                            p.enabled
+                              ? t("providers.card.monitorAriaOn", { name: p.name })
+                              : t("providers.card.monitorAriaOff", { name: p.name })
+                          }
                         />
                         <span className="monitoring-switch-track" />
                         <span className="monitoring-switch-text">
                           {isToggling
-                            ? "Updating..."
-                            : `Monitoring ${p.enabled ? "on" : "off"}`}
+                            ? t("dashboard.card.monitoringUpdating")
+                            : p.enabled
+                              ? t("dashboard.card.monitoringOn")
+                              : t("dashboard.card.monitoringOff")}
                         </span>
                       </label>
-                      <span className="muted">Status probe: {statusIntervalLabel}</span>
-                      {isRunning && <span className="pill info">Probe queued</span>}
-                      {isSyncing && <span className="pill info">Syncing model list</span>}
+                      <span className="muted">
+                        {t("providers.card.statusProbe", { n: statusIntervalLabel })}
+                      </span>
+                      {isRunning && <span className="pill info">{t("dashboard.card.probeQueued")}</span>}
+                      {isSyncing && <span className="pill info">{t("dashboard.card.syncingList")}</span>}
                     </div>
                   </div>
                 </div>
@@ -302,7 +309,7 @@ export function ProvidersPage() {
                 {dash && (
                   <div className="metrics">
                     <div className="metric">
-                      <div className="label">24h Availability</div>
+                      <div className="label">{t("dashboard.card.availability24h")}</div>
                       <div className="value">
                         {dash.availability_24h != null
                           ? `${dash.availability_24h.toFixed(1)}%`
@@ -310,21 +317,22 @@ export function ProvidersPage() {
                       </div>
                     </div>
                     <div className="metric">
-                      <div className="label">P95 Latency</div>
+                      <div className="label">{t("dashboard.card.p95Latency")}</div>
                       <div className="value">{formatMs(dash.p95_latency_ms_24h)}</div>
                     </div>
                     <div className="metric">
-                      <div className="label">Samples / Failures</div>
+                      <div className="label">{t("dashboard.card.samplesFailures")}</div>
                       <div className="value">
                         {dash.samples_24h} / {dash.failures_24h}
                       </div>
                     </div>
                     <div className="metric">
-                      <div className="label">Model List</div>
+                      <div className="label">{t("dashboard.card.modelList")}</div>
                       <div className="value" style={{ fontSize: 14 }}>
                         {dash.list_models_status ?? "—"}
                         <span className="metric-subvalue">
-                          {formatMs(dash.list_models_latency_ms)} · {formatRelative(dash.list_models_checked_at)}
+                          {formatMs(dash.list_models_latency_ms)} ·{" "}
+                          {formatRelative(dash.list_models_checked_at)}
                         </span>
                       </div>
                     </div>
@@ -347,20 +355,24 @@ export function ProvidersPage() {
                   <button
                     className="ghost sm"
                     onClick={() => setEditing(p)}
-                    title="Edit"
-                    aria-label={`Edit ${p.name}`}
+                    title={t("providers.card.edit")}
+                    aria-label={`${t("providers.card.edit")} ${p.name}`}
                   >
                     <Icon.Edit />
                   </button>
                   <button
                     className="secondary sm"
                     disabled={isRunning || !p.enabled}
-                    title={p.enabled ? "Probe current model availability, latency and error status" : "Enable monitoring before probing status"}
+                    title={
+                      p.enabled
+                        ? t("providers.card.probeTitle")
+                        : t("providers.card.probeTitleDisabled")
+                    }
                     onClick={async () => {
                       setRunningProviders((prev) => ({ ...prev, [p.id]: true }));
                       try {
-                        await withErrorToast(api.runNow(p.id), "Probe status");
-                        pushToast("info", "Probe queued", p.name);
+                        await withErrorToast(api.runNow(p.id), t("providers.card.probeStatus"));
+                        pushToast("info", t("toast.probeQueued"), p.name);
                         window.setTimeout(() => {
                           void refresh().finally(() => {
                             setRunningProviders((prev) => {
@@ -378,20 +390,20 @@ export function ProvidersPage() {
                         });
                       }
                     }}
-                    aria-label={`Probe ${p.name} status`}
+                    aria-label={t("providers.card.probeAria", { name: p.name })}
                   >
                     {isRunning ? <span className="spinner" /> : <Icon.Run />}
-                    {isRunning ? "Probing..." : "Probe status"}
+                    {isRunning ? t("providers.card.probeBusy") : t("providers.card.probeStatus")}
                   </button>
                   <button
                     className="secondary sm"
                     disabled={isSyncing}
-                    title="Re-fetch the list of models from the provider"
+                    title={t("providers.card.syncTitle")}
                     onClick={async () => {
                       setSyncingProviders((prev) => ({ ...prev, [p.id]: true }));
                       try {
-                        await withErrorToast(api.syncModels(p.id), "Sync models");
-                        pushToast("ok", "Model list updated", p.name);
+                        await withErrorToast(api.syncModels(p.id), t("providers.card.syncAction"));
+                        pushToast("ok", t("toast.modelListUpdated"), p.name);
                         await refresh();
                       } finally {
                         setSyncingProviders((prev) => {
@@ -401,25 +413,25 @@ export function ProvidersPage() {
                         });
                       }
                     }}
-                    aria-label={`Sync models for ${p.name}`}
+                    aria-label={t("providers.card.syncAria", { name: p.name })}
                   >
                     {isSyncing ? <span className="spinner" /> : <Icon.Sync />}
-                    {isSyncing ? "Syncing..." : "Sync models"}
+                    {isSyncing ? t("providers.card.syncBusy") : t("providers.card.syncAction")}
                   </button>
                   <button
                     className="ghost sm"
                     onClick={async () => {
-                      if (!confirm(`Delete ${p.name}?`)) return;
+                      if (!confirm(t("providers.card.deleteConfirm", { name: p.name }))) return;
                       try {
-                        await withErrorToast(api.deleteProvider(p.id), "Delete");
-                        pushToast("ok", "Deleted", p.name);
+                        await withErrorToast(api.deleteProvider(p.id), t("common.delete"));
+                        pushToast("ok", t("toast.deleted"), p.name);
                         await refresh();
                       } catch {
                         /* toast already shown */
                       }
                     }}
-                    title="Delete"
-                    aria-label={`Delete ${p.name}`}
+                    title={t("common.delete")}
+                    aria-label={t("providers.card.deleteAria", { name: p.name })}
                   >
                     <Icon.Delete />
                   </button>
@@ -451,6 +463,7 @@ export function ProviderDialog({
   onClose: () => void;
   onSaved: () => Promise<void> | void;
 }) {
+  const t = useT();
   const isEdit = !!provider;
   const [name, setName] = useState(provider?.name ?? "");
   const [kind, setKind] = useState<ProviderKind>(provider?.kind ?? "openai");
@@ -464,9 +477,6 @@ export function ProviderDialog({
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  // Close on Escape; focus the first input on mount. Run-once: empty deps
-  // so SSE-driven re-renders of the parent don't re-fire the focus, which
-  // would yank the user's caret out of whatever field they're editing.
   const modalRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -495,7 +505,7 @@ export function ProviderDialog({
           enabled,
         };
         if (apiKey) body.api_key = apiKey;
-        await withErrorToast(api.patchProvider(provider.id, body), isEdit ? "Save" : "Create");
+        await withErrorToast(api.patchProvider(provider.id, body), t("common.save"));
       } else {
         await withErrorToast(
           api.createProvider({
@@ -509,7 +519,7 @@ export function ProviderDialog({
             headers_json: headersJson || null,
             enabled,
           }),
-          "Create",
+          t("common.add"),
         );
       }
       await onSaved();
@@ -532,8 +542,12 @@ export function ProviderDialog({
         aria-labelledby="provider-dialog-title"
       >
         <div className="modal-header">
-          <h3 id="provider-dialog-title">{isEdit ? `Edit ${provider!.name}` : "Add Provider"}</h3>
-          <button className="modal-close" onClick={onClose} aria-label="Close">
+          <h3 id="provider-dialog-title">
+            {isEdit
+              ? t("providers.dialog.editTitle", { name: provider!.name })
+              : t("providers.dialog.addTitle")}
+          </h3>
+          <button className="modal-close" onClick={onClose} aria-label={t("common.close")}>
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <line x1="18" y1="6" x2="6" y2="18" />
               <line x1="6" y1="6" x2="18" y2="18" />
@@ -543,16 +557,16 @@ export function ProviderDialog({
 
         <div className="form-grid">
           <div className="form-row full">
-            <label>Name</label>
+            <label>{t("providers.dialog.labelName")}</label>
             <input
               value={name}
               disabled={isEdit}
               onChange={(e) => setName(e.target.value)}
-              placeholder="e.g. OpenAI Production"
+              placeholder={t("providers.dialog.namePlaceholder")}
             />
           </div>
           <div className="form-row">
-            <label>Kind</label>
+            <label>{t("providers.dialog.labelKind")}</label>
             <select
               value={kind}
               disabled={isEdit}
@@ -565,11 +579,15 @@ export function ProviderDialog({
             </select>
           </div>
           <div className="form-row">
-            <label>Base URL</label>
+            <label>{t("providers.dialog.labelBaseUrl")}</label>
             <input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} />
           </div>
           <div className="form-row full">
-            <label>{isEdit ? "API Key (leave blank to keep)" : "API Key"}</label>
+            <label>
+              {isEdit
+                ? t("providers.dialog.apiKeyEditHint")
+                : t("providers.dialog.labelApiKey")}
+            </label>
             <input
               type="password"
               value={apiKey}
@@ -578,15 +596,15 @@ export function ProviderDialog({
             />
           </div>
           <div className="form-row full">
-            <label>Proxy (optional)</label>
+            <label>{t("providers.dialog.labelProxy")}</label>
             <input
               value={proxy}
               onChange={(e) => setProxy(e.target.value)}
-              placeholder="http://127.0.0.1:7890"
+              placeholder={t("providers.dialog.proxyPlaceholder")}
             />
           </div>
           <div className="form-row">
-            <label>Model list interval (s)</label>
+            <label>{t("providers.dialog.labelModelInterval")}</label>
             <input
               type="number"
               value={intervalSec}
@@ -596,7 +614,7 @@ export function ProviderDialog({
             />
           </div>
           <div className="form-row">
-            <label>Timeout (s)</label>
+            <label>{t("providers.dialog.labelTimeout")}</label>
             <input
               type="number"
               value={timeoutSec}
@@ -606,16 +624,16 @@ export function ProviderDialog({
             />
           </div>
           <div className="form-row full">
-            <label>Custom Headers (JSON, optional)</label>
+            <label>{t("providers.dialog.labelCustomHeaders")}</label>
             <textarea
               rows={2}
               value={headersJson}
               onChange={(e) => setHeadersJson(e.target.value)}
-              placeholder='{"X-Org": "acme"}'
+              placeholder={t("providers.dialog.customHeadersPlaceholder")}
             />
           </div>
           <div className="form-row full">
-            <label>Monitoring</label>
+            <label>{t("providers.dialog.labelMonitoring")}</label>
             <label className="monitoring-switch provider-dialog-switch">
               <input
                 type="checkbox"
@@ -624,7 +642,9 @@ export function ProviderDialog({
               />
               <span className="monitoring-switch-track" />
               <span className="monitoring-switch-text">
-                {enabled ? "Auto-monitoring on" : "Auto-monitoring off"}
+                {enabled
+                  ? t("providers.dialog.monitorOn")
+                  : t("providers.dialog.monitorOff")}
               </span>
             </label>
           </div>
@@ -634,15 +654,15 @@ export function ProviderDialog({
 
         <div className="modal-footer">
           <button className="secondary" onClick={onClose} disabled={busy}>
-            Cancel
+            {t("common.cancel")}
           </button>
           <button onClick={submit} disabled={busy || (!isEdit && (!name || !apiKey))}>
             {busy ? (
               <>
-                <span className="spinner" /> Saving...
+                <span className="spinner" /> {t("common.saving")}
               </>
             ) : (
-              "Save"
+              t("common.save")
             )}
           </button>
         </div>

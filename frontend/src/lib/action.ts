@@ -1,4 +1,5 @@
 import { pushToast } from "../components/Toast";
+import { t as i18nT } from "./i18n";
 
 /** Show a failure toast for an unhandled error from a user action. */
 export function describeError(e: unknown): { title: string; detail?: string } {
@@ -6,11 +7,14 @@ export function describeError(e: unknown): { title: string; detail?: string } {
     // fetch() throws TypeError on network failure; the message is usually
     // "Failed to fetch" or "NetworkError when attempting to fetch resource".
     if (e instanceof TypeError && /fetch|network/i.test(e.message)) {
-      return { title: "Network error", detail: "Check your connection and try again" };
+      return {
+        title: i18nT("errors.network.title"),
+        detail: i18nT("errors.network.detail"),
+      };
     }
-    return { title: "Action failed", detail: e.message };
+    return { title: i18nT("errors.action.title"), detail: e.message };
   }
-  return { title: "Action failed", detail: String(e) };
+  return { title: i18nT("errors.action.title"), detail: String(e) };
 }
 
 /**

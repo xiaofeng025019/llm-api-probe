@@ -1,14 +1,17 @@
 import { useTheme } from "../hooks/useTheme";
+import { useT } from "../hooks/useT";
 import { IconSun, IconMoon } from "./Icons";
 
 export function ThemeToggle() {
   const [theme, toggle] = useTheme();
+  const t = useT();
+  const label = theme === "light" ? "Switch to dark mode" : "Switch to light mode";
   return (
     <button
       className="theme-toggle"
       onClick={toggle}
-      title={theme === "light" ? "Switch to dark mode" : "Switch to light mode"}
-      aria-label={theme === "light" ? "Switch to dark mode" : "Switch to light mode"}
+      title={label}
+      aria-label={label}
       aria-pressed={theme === "dark"}
     >
       <span aria-hidden="true">

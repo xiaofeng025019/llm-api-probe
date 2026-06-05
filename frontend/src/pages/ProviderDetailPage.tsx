@@ -33,6 +33,7 @@ import {
   IconGlobe,
   IconNetwork,
 } from "../components/Icons";
+import { useT } from "../hooks/useT";
 
 const WINDOWS: Array<{ label: string; hours: number }> = [
   { label: "1h", hours: 1 },
@@ -73,6 +74,7 @@ export function ProviderDetailPage() {
   const { id } = useParams<{ id: string }>();
   const providerId = id!;
   const nav = useNavigate();
+  const t = useT();
 
   const [provider, setProvider] = useState<Provider | null>(null);
   const [models, setModels] = useState<ModelOut[]>([]);
@@ -234,27 +236,27 @@ export function ProviderDetailPage() {
                   className="pill"
                   style={{ background: "rgba(255,255,255,0.2)", color: "white" }}
                 >
-                  disabled
+                  {t("providerDetail.hero.disabledBadge")}
                 </span>
               )}
             </div>
             <h1>{provider.name}</h1>
             <div className="meta">
               <span>
-                <IconClock /> Model list refreshes every {provider.interval_seconds}s
+                <IconClock /> {t("providerDetail.hero.listEvery", { n: provider.interval_seconds })}
               </span>
               <span>·</span>
               <span>
-                Status probe: {statusIntervalLabel}
+                {t("providerDetail.hero.statusProbe", { n: statusIntervalLabel })}
               </span>
               <span>·</span>
               <span>
-                <IconProbe /> Timeout {provider.timeout_seconds}s
+                <IconProbe /> {t("providerDetail.hero.timeout", { n: provider.timeout_seconds })}
               </span>
               {provider.proxy && (
                 <>
                   <span>·</span>
-                  <span>proxy: {provider.proxy}</span>
+                  <span>{t("providerDetail.hero.proxy", { url: provider.proxy })}</span>
                 </>
               )}
             </div>
@@ -264,23 +266,25 @@ export function ProviderDetailPage() {
               className="secondary"
               onClick={async () => {
                 try {
-                  await withErrorToast(api.syncModels(providerId), "Sync models");
+                  await withErrorToast(api.syncModels(providerId), t("providerDetail.hero.syncModels"));
                   await refresh();
                 } catch {
                   /* toast already shown */
                 }
               }}
-              title="Re-fetch the list of models from the provider"
+              title={t("dashboard.card.syncModelsTitle")}
             >
               <IconRefresh />
-              Sync models
+              {t("providerDetail.hero.syncModels")}
             </button>
             <button
-              onClick={() => withErrorToast(api.runNow(providerId), "Probe status").then(refresh)}
-              title="Probe current model availability, latency and error status"
+              onClick={() =>
+                withErrorToast(api.runNow(providerId), t("providerDetail.hero.probeStatus")).then(refresh)
+              }
+              title={t("dashboard.card.probeStatusTitle")}
             >
               <IconPlay />
-              Probe status
+              {t("providerDetail.hero.probeStatus")}
             </button>
           </div>
         </div>
@@ -288,7 +292,7 @@ export function ProviderDetailPage() {
 
       <div className="stat-grid stagger">
         <Stat
-          label="Latest status"
+          label={t("providerDetail.stat.latestStatus")}
           value={lastResult ? (lastResult.success ? "OK" : "Failed") : "—"}
           accentColor={statusColor(
             lastResult ? (lastResult.success ? "ok" : "fail") : null,
@@ -296,17 +300,17 @@ export function ProviderDetailPage() {
           icon={lastResult?.success ? <IconCheck /> : <IconAlert />}
         />
         <Stat
-          label="Latest latency"
+          label={t("providerDetail.stat.latestLatency")}
           value={formatMs(lastResult?.latency_ms ?? null)}
           icon={<IconClock />}
         />
         <Stat
-          label="Latest TTFB"
+          label={t("providerDetail.stat.latestTtfb")}
           value={formatMs(lastResult?.ttfb_ms ?? null)}
           icon={<IconActivity />}
         />
         <Stat
-          label={`${window_.label} availability`}
+          label={t("providerDetail.stat.availabilityWindow", { window: window_.label })}
           value={availability != null ? `${availability.toFixed(1)}%` : "—"}
           accentColor={
             availability == null
@@ -317,28 +321,28 @@ export function ProviderDetailPage() {
                   ? "var(--warn)"
                   : "var(--fail)"
           }
-          hint={`${successes}/${results.length} successful`}
+          hint={t("providerDetail.stat.hintSuccess", { success: successes, total: results.length })}
           icon={<IconChart />}
         />
         <Stat
-          label={`${window_.label} avg latency`}
+          label={t("providerDetail.stat.avgLatencyWindow", { window: window_.label })}
           value={formatMs(avgLatency)}
           icon={<IconClock />}
         />
         <Stat
-          label={`${window_.label} P95 latency`}
+          label={t("providerDetail.stat.p95LatencyWindow", { window: window_.label })}
           value={formatMs(p95Latency)}
           icon={<IconGauge />}
         />
         <Stat
-          label={`${window_.label} P95 TTFB`}
+          label={t("providerDetail.stat.p95TtfbWindow", { window: window_.label })}
           value={formatMs(p95Ttfb)}
           icon={<IconActivity />}
         />
         <Stat
-          label={`${window_.label} samples`}
+          label={t("providerDetail.stat.samplesWindow", { window: window_.label })}
           value={qualityResults.length}
-          hint={`${successes} successful, ${failures} failed`}
+          hint={t("providerDetail.stat.hintSamples", { success: successes, failed: failures })}
           icon={<IconHash />}
         />
       </div>
@@ -347,29 +351,29 @@ export function ProviderDetailPage() {
         <div className="section-header">
           <div className="section-title">
             <IconGauge />
-            Provider Quality
+            {t("providerDetail.quality.modelList")}
           </div>
-          <span className="muted">{window_.label} window</span>
+          <span className="muted">{window_.label} {t("dashboard.card.availability24h").replace("24h Availability", "window")}</span>
         </div>
         <div className="provider-quality-grid">
           <div className="quality-tile quality-wide">
             <div className="quality-tile-head">
               <span>
                 <IconGlobe />
-                Endpoint
+                {t("providerDetail.quality.endpoint")}
               </span>
               <span className={`pill ${provider.enabled ? "ok" : "warn"}`}>
-                {provider.enabled ? "monitoring" : "paused"}
+                {provider.enabled ? t("providerDetail.quality.monitoringOn") : t("providerDetail.quality.monitoringOff")}
               </span>
             </div>
             <div className="endpoint-value" title={provider.base_url}>
               {provider.base_url}
             </div>
             <div className="quality-meta">
-              <span>Timeout {provider.timeout_seconds}s</span>
-              <span>Probe {statusIntervalLabel}</span>
-              <span>Model list {provider.interval_seconds}s</span>
-              {provider.proxy && <span>Proxy configured</span>}
+              <span>{t("providerDetail.quality.timeout", { n: provider.timeout_seconds })}</span>
+              <span>{t("providerDetail.quality.listEvery", { n: statusIntervalLabel })}</span>
+              <span>{t("providerDetail.quality.modelInterval", { n: provider.interval_seconds })}</span>
+              {provider.proxy && <span>{t("providerDetail.quality.proxy")}</span>}
             </div>
           </div>
 
@@ -377,7 +381,7 @@ export function ProviderDetailPage() {
             <div className="quality-tile-head">
               <span>
                 <IconRefresh />
-                Model List
+                {t("providerDetail.quality.modelList")}
               </span>
               <span className={`status-dot ${listModelsStatus ?? "unknown"}`} />
             </div>
@@ -397,15 +401,15 @@ export function ProviderDetailPage() {
             <div className="quality-tile-head">
               <span>
                 <IconModels />
-                Model Coverage
+                {t("providerDetail.quality.modelCoverage")}
               </span>
             </div>
             <div className="quality-value">
               {availableModels} / {enabledModels}
             </div>
             <div className="quality-meta">
-              <span>Available Models</span>
-              <span>Total {models.length}</span>
+              <span>{t("providerDetail.quality.availableModels")}</span>
+              <span>{t("providerDetail.quality.total", { n: models.length })}</span>
             </div>
           </div>
 
@@ -413,14 +417,14 @@ export function ProviderDetailPage() {
             <div className="quality-tile-head">
               <span>
                 <IconNetwork />
-                Communication
+                {t("providerDetail.quality.communication")}
               </span>
             </div>
             <div className="quality-value">{formatMs(p95Latency)}</div>
             <div className="quality-meta">
-              <span>P95 latency</span>
-              <span>P95 TTFB {formatMs(p95Ttfb)}</span>
-              <span>Avg {formatMs(avgLatency)}</span>
+              <span>{t("providerDetail.quality.p95Latency")}</span>
+              <span>{t("providerDetail.quality.p95Ttfb")} {formatMs(p95Ttfb)}</span>
+              <span>{t("providerDetail.quality.avg", { n: formatMs(avgLatency) })}</span>
             </div>
           </div>
 
@@ -428,12 +432,12 @@ export function ProviderDetailPage() {
             <div className="quality-tile-head">
               <span>
                 <IconAlert />
-                Errors
+                {t("providerDetail.quality.errors")}
               </span>
               <span className={`pill ${failures > 0 ? "fail" : "ok"}`}>{failures}</span>
             </div>
             {selectedWindowErrors.length > 0 ? (
-              <div className="error-chip-list" aria-label={`${window_.label} error distribution`}>
+              <div className="error-chip-list" aria-label={t("providerDetail.quality.errors")}>
                 {selectedWindowErrors.slice(0, 4).map(([code, count]) => (
                   <span className="error-chip" key={code}>
                     {code} <strong>{count}</strong>
@@ -441,10 +445,10 @@ export function ProviderDetailPage() {
                 ))}
               </div>
             ) : (
-              <div className="quality-value">No errors</div>
+              <div className="quality-value">{t("providerDetail.quality.noErrors")}</div>
             )}
             <div className="quality-meta">
-              <span>{qualityResults.length} model probes</span>
+              <span>{t("providerDetail.quality.modelProbes", { n: qualityResults.length })}</span>
             </div>
           </div>
         </div>
@@ -454,12 +458,12 @@ export function ProviderDetailPage() {
         <div className="section-header">
           <div className="section-title">
             <IconChart />
-            Trend
+            {t("providerDetail.chart.title")}
           </div>
           <div
             className="window-tabs"
             role="tablist"
-            aria-label="Time window"
+            aria-label={t("providerDetail.chart.windowTabs")}
           >
             {WINDOWS.map((w, idx) => (
               <button
@@ -477,7 +481,7 @@ export function ProviderDetailPage() {
             ))}
           </div>
         </div>
-        <div role="tabpanel" aria-label={`${window_.label} trend`}>
+        <div role="tabpanel" aria-label={t("providerDetail.chart.tabPanel", { window: window_.label })}>
           <ResultsChart results={results} />
         </div>
       </div>
@@ -486,13 +490,13 @@ export function ProviderDetailPage() {
         <div className="section-header">
           <div className="section-title">
             <IconModels />
-            Models
+            {t("providerDetail.models.title")}
           </div>
-          <span className="muted">{models.length} total</span>
+          <span className="muted">{t("providerDetail.models.count", { n: models.length })}</span>
         </div>
         {models.length === 0 ? (
           <div className="empty-state" style={{ padding: 32 }}>
-            <p>No models yet. Click "Sync models" to fetch.</p>
+            <p>{t("providerDetail.models.empty")}</p>
           </div>
         ) : (
           <div className="model-card-grid fade-up">
@@ -519,7 +523,7 @@ export function ProviderDetailPage() {
                         onClick={() =>
                           api.patchModel(m.id, { is_favorite: !m.is_favorite }).then(refresh)
                         }
-                        aria-label={m.is_favorite ? "Unfavorite" : "Favorite"}
+                        aria-label={m.is_favorite ? t("providerDetail.models.card.favoriteAriaOn") : t("providerDetail.models.card.favoriteAriaOff")}
                         aria-pressed={m.is_favorite}
                       >
                         <IconStarOutline filled={m.is_favorite} />
@@ -537,21 +541,21 @@ export function ProviderDetailPage() {
                         onClick={() =>
                           withErrorToast(
                             api.patchModel(m.id, { enabled: !m.enabled }),
-                            "Toggle enabled",
+                            t("common.disable"),
                           ).then(refresh)
                         }
-                        aria-label={m.enabled ? "Pause model" : "Enable model"}
-                        title={m.enabled ? "Pause" : "Enable"}
+                        aria-label={m.enabled ? t("providerDetail.models.card.disableAria") : t("providerDetail.models.card.enableAria")}
+                        title={m.enabled ? t("providerDetail.models.card.disableTitle") : t("providerDetail.models.card.enableTitle")}
                       >
                         {m.enabled ? <IconCheck /> : <IconAlert />}
                       </button>
                       <button
                         className="ghost sm"
                         onClick={() =>
-                          withErrorToast(api.probeNow(providerId, m.id), "Probe model").then(refresh)
+                          withErrorToast(api.probeNow(providerId, m.id), t("dashboard.card.probeStatus")).then(refresh)
                         }
-                        aria-label={"Probe model " + m.model_id}
-                        title="Probe this model"
+                        aria-label={t("providerDetail.models.card.probeAria", { name: m.model_id })}
+                        title={t("providerDetail.models.card.probeTitle")}
                       >
                         <IconProbe />
                       </button>
@@ -560,8 +564,8 @@ export function ProviderDetailPage() {
                         onClick={() =>
                           setExpandedModels((prev) => ({ ...prev, [m.id]: !prev[m.id] }))
                         }
-                        aria-label={expanded ? "Collapse details" : "Expand details"}
-                        title={expanded ? "Collapse" : "Details"}
+                        aria-label={expanded ? t("providerDetail.models.card.detailsAriaOn") : t("providerDetail.models.card.detailsAriaOff")}
+                        title={expanded ? t("providerDetail.models.card.detailsTitleOn") : t("providerDetail.models.card.detailsTitleOff")}
                       >
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                           {expanded
@@ -582,39 +586,41 @@ export function ProviderDetailPage() {
                     )}
                     {m.consecutive_failures > 0 && (
                       <span className="pill warn" style={{ fontSize: 10, padding: "1px 6px" }}>
-                        {m.consecutive_failures + "× fail"}
+                        {t("providerDetail.models.card.metricFail", { n: m.consecutive_failures })}
                       </span>
                     )}
                     {!m.enabled && (
                       <span className="pill warn" style={{ fontSize: 10, padding: "1px 6px" }}>
-                        disabled
+                        {t("providerDetail.models.card.metricDisabled")}
                       </span>
                     )}
                     <span className="muted" style={{ marginLeft: "auto", fontSize: 10 }}>
                       {m.status_checked_at
                         ? formatRelative(m.status_checked_at)
-                        : m.status_confirmed_at ? "confirmed" : "unconfirmed"}
+                        : m.status_confirmed_at
+                          ? t("providerDetail.models.card.metricConfirmed")
+                          : t("providerDetail.models.card.metricUnconfirmed")}
                     </span>
                   </div>
 
                   {/* ---- Collapsed: 4 key metrics ---- */}
                   <div className="model-card-metrics">
                     <div className="model-metric">
-                      <span className="model-metric-label">24h</span>
+                      <span className="model-metric-label">{t("providerDetail.models.card.barLabel24h")}</span>
                       <span className="model-metric-value" style={{ color: availColor }}>
                         {formatPercent(avail)}
                       </span>
                     </div>
                     <div className="model-metric">
-                      <span className="model-metric-label">Samples</span>
+                      <span className="model-metric-label">{t("providerDetail.models.card.samplesLabel")}</span>
                       <span className="model-metric-value">{quality?.samples24h ?? 0}</span>
                     </div>
                     <div className="model-metric">
-                      <span className="model-metric-label">P95</span>
+                      <span className="model-metric-label">{t("providerDetail.models.card.p95Label")}</span>
                       <span className="model-metric-value">{formatMs(quality?.p95Latency)}</span>
                     </div>
                     <div className="model-metric">
-                      <span className="model-metric-label">TTFB</span>
+                      <span className="model-metric-label">{t("providerDetail.models.card.ttfbLabel")}</span>
                       <span className="model-metric-value">{formatMs(quality?.p95Ttfb)}</span>
                     </div>
                   </div>
@@ -635,29 +641,29 @@ export function ProviderDetailPage() {
                     <div className="model-card-details">
                       <div className="model-details-grid">
                         <div className="model-detail-item">
-                          <span className="model-detail-label">Latest Latency</span>
+                          <span className="model-detail-label">{t("providerDetail.models.card.labelLatestLatency")}</span>
                           <span className="model-detail-value">{formatMs(latest?.latency_ms)}</span>
                         </div>
                         <div className="model-detail-item">
-                          <span className="model-detail-label">Latest TTFB</span>
+                          <span className="model-detail-label">{t("providerDetail.models.card.labelLatestTtfb")}</span>
                           <span className="model-detail-value">{formatMs(latest?.ttfb_ms)}</span>
                         </div>
                         <div className="model-detail-item">
-                          <span className="model-detail-label">P95 Latency</span>
+                          <span className="model-detail-label">{t("providerDetail.models.card.labelP95Latency")}</span>
                           <span className="model-detail-value">{formatMs(quality?.p95Latency)}</span>
                         </div>
                         <div className="model-detail-item">
-                          <span className="model-detail-label">P95 TTFB</span>
+                          <span className="model-detail-label">{t("providerDetail.models.card.labelP95Ttfb")}</span>
                           <span className="model-detail-value">{formatMs(quality?.p95Ttfb)}</span>
                         </div>
                         <div className="model-detail-item">
-                          <span className="model-detail-label">Failures</span>
+                          <span className="model-detail-label">{t("providerDetail.models.card.labelFailures")}</span>
                           <span className={"model-detail-value" + (m.consecutive_failures > 0 ? " text-warn" : "")}>
                             {m.consecutive_failures}
                           </span>
                         </div>
                         <div className="model-detail-item">
-                          <span className="model-detail-label">24h Avail</span>
+                          <span className="model-detail-label">{t("providerDetail.models.card.labelAvail")}</span>
                           <span className="model-detail-value" style={{ color: availColor }}>
                             {formatPercent(avail)}
                           </span>
@@ -665,15 +671,15 @@ export function ProviderDetailPage() {
                       </div>
                       <div className="model-details-footer">
                         <span>
-                          Status checked: {m.status_checked_at ? formatTime(m.status_checked_at) : "—"}
+                          {t("providerDetail.models.card.statusChecked", { t: m.status_checked_at ? formatTime(m.status_checked_at) : "—" })}
                         </span>
                         {m.last_success_at && (
                           <span>
-                            Last success: {formatTime(m.last_success_at)}
+                            {t("providerDetail.models.card.lastSuccess", { t: formatTime(m.last_success_at) })}
                           </span>
                         )}
                         <span>
-                          Last seen: {formatTime(m.last_seen_at)}
+                          {t("providerDetail.models.card.lastSeen", { t: formatTime(m.last_seen_at) })}
                         </span>
                       </div>
                     </div>
@@ -691,7 +697,7 @@ export function ProviderDetailPage() {
         style={{ marginTop: 16 }}
       >
         <IconBack />
-        Back to Providers
+        {t("common.back")} {t("nav.providers")}
       </button>
     </div>
   );
