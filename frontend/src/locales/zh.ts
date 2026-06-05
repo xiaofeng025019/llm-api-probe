@@ -91,6 +91,11 @@ const zh = {
   dashboard: {
     title: "总览",
     subtitle: "所有 LLM 服务商的实时可用性",
+    refreshAll: {
+      label: "立即刷新",
+      title: "立即对所有启用的服务商和模型发起一次探测",
+      ariaLabel: "立即对所有启用的服务商和模型发起一次探测",
+    },
     stat: {
       providers: { label: "服务商", sub: "开启监测" },
       availableModels: { label: "可用模型", sub: "24h 在线" },

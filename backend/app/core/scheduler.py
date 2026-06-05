@@ -359,6 +359,58 @@ async def trigger_now(provider_uuid: uuid.UUID, model_uuid: uuid.UUID | None, se
         return True
 
 
+async def trigger_all_models_now(
+    session_maker=None,
+) -> tuple[int, int]:
+    """Schedule a fresh probe for every enabled provider+model.
+
+    Returns (scheduled, skipped):
+    - scheduled: number of probes that were actually enqueued
+    - skipped: number of (provider, model) pairs that were skipped
+      (provider disabled, model disabled, model soft-deleted, etc.)
+
+    Used by the dashboard "Refresh all" button and the page-mount
+    auto-refresh, so the user sees fresh availability numbers instead
+    of a stale snapshot from whenever the periodic scheduler last ran.
+
+    Concurrency: rely on APScheduler's max_instances=1 + coalesce=True
+    on each job to merge rapid duplicate triggers into a single run.
+    Calling this 3 times in a row from 3 browser tabs won't queue 3
+    probe runs per model — it queues at most 1.
+    """
+    sm = session_maker or get_session_maker()
+    scheduled = 0
+    skipped = 0
+    async with sm() as session:
+        providers = list(
+            (await session.execute(
+                select(Provider).where(Provider.deleted_at.is_(None), Provider.enabled.is_(True))
+            )).scalars().all()
+        )
+        for p in providers:
+            # One list_models probe per provider
+            if await trigger_now(p.uuid_id, None, session_maker=sm):
+                scheduled += 1
+            else:
+                skipped += 1
+            # One chat_completion probe per enabled model
+            models = list(
+                (await session.execute(
+                    select(Model).where(
+                        Model.provider_id == p.id,
+                        Model.enabled.is_(True),
+                        Model.deleted_at.is_(None),
+                    )
+                )).scalars().all()
+            )
+            for m in models:
+                if await trigger_now(p.uuid_id, m.uuid_id, session_maker=sm):
+                    scheduled += 1
+                else:
+                    skipped += 1
+    return scheduled, skipped
+
+
 # set of in-flight probe tasks created by trigger_now; lets asyncio.discard them.
 _background_tasks: set[asyncio.Task[None]] = set()
 

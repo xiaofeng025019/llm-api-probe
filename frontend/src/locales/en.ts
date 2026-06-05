@@ -90,6 +90,11 @@ const en = {
   dashboard: {
     title: "Dashboard",
     subtitle: "Real-time availability of all LLM providers",
+    refreshAll: {
+      label: "Refresh all",
+      title: "Probe every enabled provider and model right now",
+      ariaLabel: "Probe every enabled provider and model right now",
+    },
     stat: {
       providers: { label: "Providers", sub: "monitoring" },
       availableModels: { label: "Available Models", sub: "24h online" },

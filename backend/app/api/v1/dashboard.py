@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sse_starlette.sse import EventSourceResponse
 
-from app.core.scheduler import sync_all_jobs, trigger_now
+from app.core.scheduler import sync_all_jobs, trigger_all_models_now, trigger_now
 from app.core.sse import get_sse
 from app.db.session import get_session
 from app.schemas.api import (
@@ -292,6 +292,22 @@ async def probe_run(
             detail=f"{target} is disabled; enable it before triggering a probe",
         )
     return ApiResponse(data={"scheduled": True})
+
+
+@router.post("/probe/run-all", response_model=ApiResponse)
+async def probe_run_all(session: AsyncSession = Depends(get_session)) -> ApiResponse:
+    """Schedule a fresh probe for every enabled provider + model.
+
+    Used by the dashboard's page-mount auto-refresh and the
+    "Refresh all" button. Returns the count of probes that were
+    enqueued vs. skipped (e.g. provider disabled).
+
+    Probes run asynchronously in the background; the API call
+    returns immediately. Watch the SSE stream or poll the
+    /results endpoint to see results land.
+    """
+    scheduled, skipped = await trigger_all_models_now()
+    return ApiResponse(data={"scheduled": scheduled, "skipped": skipped})
 
 
 @router.get("/events")

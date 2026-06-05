@@ -241,4 +241,8 @@ export const api = {
     if (modelId != null) q.set("model_id", String(modelId));
     return request<{ scheduled: boolean }>(`/api/v1/probe/run?${q.toString()}`, { method: "POST" });
   },
+  /** Schedule a fresh probe for every enabled provider + model.
+   *  Returns immediately; results land asynchronously. */
+  probeAll: () =>
+    request<{ scheduled: number; skipped: number }>("/api/v1/probe/run-all", { method: "POST" }),
 };

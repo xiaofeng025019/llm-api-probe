@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api, Dashboard, ModelOut, Provider, Setting } from "../api/types";
 import { useSse } from "./useSse";
 
@@ -20,17 +20,28 @@ export function useDashboard(autoRefreshOnSse = true): DashboardState {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const refresh = useCallback(async () => {
+  // Two-tier refresh:
+  //  - fast tier: dashboard + providers + settings. Cheap. The
+  //    dashboard already has aggregated per-provider stats and
+  //    favorites with latency/error info, which is what the
+  //    dashboard cards actually need.
+  //  - slow tier: per-provider model lists. 1 request per provider.
+  //    The ProvidersPage is the only consumer of modelsByProvider
+  //    and it only uses model_id / is_favorite / status — fields
+  //    that change at human, not burst, speed.
+  //
+  // SSE-driven refresh only fires the fast tier. Slow tier runs
+  // on mount, on explicit refresh() calls, and on a slow interval.
+  // This caps a refresh-all burst at ~1 fast refresh, not 50.
+  const inFlightSlowRef = useRef(false);
+
+  const refreshFast = useCallback(async () => {
     setError(null);
     try {
       const [d, ps, ss] = await Promise.all([api.dashboard(), api.providers(), api.settings()]);
       setDashboard(d);
       setProviders(ps);
       setSettings(ss);
-      const entries = await Promise.all(
-        ps.map(async (p) => [p.id, await api.models(p.id)] as const),
-      );
-      setModelsByProvider(Object.fromEntries(entries));
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -38,24 +49,68 @@ export function useDashboard(autoRefreshOnSse = true): DashboardState {
     }
   }, []);
 
-  useEffect(() => {
-    refresh();
-  }, [refresh]);
+  const refreshSlow = useCallback(async () => {
+    if (inFlightSlowRef.current) return;
+    inFlightSlowRef.current = true;
+    try {
+      // Snapshot current provider list — if providers changes mid-call
+      // we still write consistent state from one snapshot.
+      const ps = await api.providers();
+      const entries = await Promise.all(
+        ps.map(async (p) => [p.id, await api.models(p.id)] as const),
+      );
+      setModelsByProvider(Object.fromEntries(entries));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      inFlightSlowRef.current = false;
+    }
+  }, []);
+
+  // Public refresh: both tiers. Used by user-initiated actions
+  // (delete, patch, etc.) where consistency matters.
+  const refresh = useCallback(async () => {
+    await refreshFast();
+    await refreshSlow();
+  }, [refreshFast, refreshSlow]);
 
   useEffect(() => {
-    const t = setInterval(refresh, 30_000);
+    void refreshFast();
+    void refreshSlow();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    const t = setInterval(refreshFast, 30_000);
     return () => clearInterval(t);
-  }, [refresh]);
+  }, [refreshFast]);
 
+  useEffect(() => {
+    const t = setInterval(refreshSlow, 5 * 60_000);
+    return () => clearInterval(t);
+  }, [refreshSlow]);
+
+  // Debounce SSE-driven refresh. The probe scheduler can fire
+  // `probe.completed` 50+ times in a few seconds (e.g. right after
+  // a "Refresh all" click that scheduled every model). Without
+  // coalescing, each event would re-fetch and re-render → noticeable
+  // jank on the dashboard. Coalesce to one refresh per coalesce
+  // window; the next probe batch's events will trigger another
+  // refresh, so freshness is bounded at ~500ms.
+  const coalesceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useSse((event) => {
     if (!autoRefreshOnSse) return;
     if (
-      event === "probe.completed" ||
-      event === "model.updated" ||
-      event === "provider.updated"
-    ) {
-      void refresh();
-    }
+      event !== "probe.completed" &&
+      event !== "model.updated" &&
+      event !== "provider.updated"
+    )
+      return;
+    if (coalesceRef.current) clearTimeout(coalesceRef.current);
+    coalesceRef.current = setTimeout(() => {
+      coalesceRef.current = null;
+      void refreshFast();
+    }, 500);
   });
 
   return { dashboard, providers, modelsByProvider, settings, loading, error, refresh };

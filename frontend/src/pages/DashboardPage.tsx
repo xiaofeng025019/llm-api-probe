@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import { useDashboard } from "../hooks/useDashboard";
 import {
@@ -72,9 +72,40 @@ export function DashboardPage() {
   const { dashboard, providers, settings, loading, error, refresh } = useDashboard();
   const [runningProviders, setRunningProviders] = useState<Record<string, boolean>>({});
   const [showAddProvider, setShowAddProvider] = useState(false);
+  const [refreshingAll, setRefreshingAll] = useState(false);
   const activeDashboardProviders = dashboard?.providers.filter((p) => p.enabled) ?? [];
   const statusIntervalLabel = modelStatusIntervalLabel(settings);
   const statusIntervalValue = modelStatusIntervalValue(settings);
+
+  // Auto-trigger a full probe sweep on first mount. Without this the
+  // dashboard's "Available Models N/52" stat only reflects whatever
+  // the periodic scheduler has happened to run since the last
+  // restart — confusingly low on a freshly opened page. Coalescing
+  // is handled server-side (APScheduler max_instances=1), so opening
+  // the same page in 3 tabs doesn't queue 3×N probes.
+  const initialSweepRef = useRef(false);
+  useEffect(() => {
+    if (initialSweepRef.current) return;
+    initialSweepRef.current = true;
+    void api.probeAll().catch(() => {
+      /* non-critical; the periodic sweep will catch up */
+    });
+  }, []);
+
+  async function onRefreshAll() {
+    if (refreshingAll) return;
+    setRefreshingAll(true);
+    try {
+      await api.probeAll();
+    } catch {
+      /* toast handled by withErrorToast; the polling refresh will pick up partial results */
+    } finally {
+      // Briefly show the indicator even on success, so the user gets
+      // feedback that the click did something. The actual probes run
+      // async in the background and land via SSE / 30s polling.
+      setTimeout(() => setRefreshingAll(false), 1500);
+    }
+  }
 
   async function onDelete(p: Provider) {
     if (!confirm(t("common.confirmDeleteProvider", { name: p.name }))) return;
@@ -118,6 +149,21 @@ export function DashboardPage() {
         <div>
           <h1>{t("dashboard.title")}</h1>
           <div className="subtitle">{t("dashboard.subtitle")}</div>
+        </div>
+        <div className="page-header-actions">
+          <button
+            type="button"
+            className="btn btn-ghost"
+            onClick={onRefreshAll}
+            disabled={refreshingAll}
+            title={t("dashboard.refreshAll.title")}
+            aria-label={t("dashboard.refreshAll.ariaLabel")}
+          >
+            <span className={refreshingAll ? "spin" : ""} aria-hidden="true">
+              <IconRefresh />
+            </span>
+            <span>{t("dashboard.refreshAll.label")}</span>
+          </button>
         </div>
       </div>
 
