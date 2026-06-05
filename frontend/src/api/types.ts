@@ -140,6 +140,10 @@ export interface FavoriteEntry {
  *  import. On export, both are emitted. */
 export interface ExportPayload {
   providers: Array<{
+    /** Stable identifier. Re-imported to preserve the provider's
+     *  identity across export/import cycles. Optional on import for
+     *  legacy files; the DB auto-generates one when missing. */
+    uuid_id?: string;
     name: string;
     kind: ProviderKind;
     base_url: string;

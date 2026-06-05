@@ -109,6 +109,9 @@ async def record_outcome(
         # a model (e.g. list_models probes when no model row matched).
         provider_uuid_at_probe=provider.uuid_id,
         model_uuid_at_probe=model.uuid_id if model else None,
+        # Explicit timestamp so we don't rely on the DB DEFAULT
+        # (which can be lost during SQLite table-rebuild migrations).
+        checked_at=datetime.now(UTC),
     )
     session.add(row)
     if target == ProbeTarget.chat_completion and model is not None:
@@ -165,6 +168,26 @@ def _provider_health_status(
     enabled_model_ids: list[int],
     recent_per_model: dict[int, bool],
 ) -> str | None:
+    """Compute the rollup status shown in the dashboard.
+
+    Semantics:
+    - `disabled` if the provider itself is off.
+    - `fail` if the most recent list_models probe failed (the upstream
+      API is unreachable or unauthorized).
+    - `ok` if every enabled model that has been probed at least once
+      came back successful on its most recent probe.
+    - `fail` if every probed model is currently failing.
+    - `degraded` if the probed models are mixed (some online, some
+      offline).
+    - `None` if no enabled model has ever been probed yet and the
+      list_models probe has not landed — we have no signal to report.
+
+    Important: an enabled model that has *never* been probed is
+    intentionally excluded from the ok/fail/degraded calculation.
+    We only count models we have actual signal on. A 100%-online
+    list_models probe with 0 chat probes yet is NOT "degraded"; it
+    has no chat signal yet so we wait.
+    """
     if not provider_enabled:
         return None
     if latest_list_models is not None and not latest_list_models.success:
@@ -174,13 +197,15 @@ def _provider_health_status(
         known = [recent_per_model[m_id] for m_id in enabled_model_ids if m_id in recent_per_model]
         if known:
             online = sum(1 for ok in known if ok)
-            if online == len(enabled_model_ids):
+            if online == len(known):
                 return "ok"
-            if online == 0 and len(known) == len(enabled_model_ids):
+            if online == 0:
                 return "fail"
             return "degraded"
+        # No chat probes yet, but list_models succeeded → just hasn't
+        # reached the per-model cadence yet. Don't report "degraded".
         if latest_list_models is not None and latest_list_models.success:
-            return "degraded"
+            return None
         return None
 
     if latest_list_models is not None:

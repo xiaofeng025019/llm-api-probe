@@ -45,6 +45,13 @@ class ProviderCreate(BaseModel):
     interval_seconds: int = Field(default=300, ge=10, le=86400)
     timeout_seconds: int = Field(default=30, ge=2, le=600)
     headers_json: str | None = None
+    # Optional stable identifier. When the import payload comes from a
+    # prior export, this is the same UUID the export had — preserving
+    # it lets downstream cross-references (favorites with provider_uuid,
+    # probe_results.provider_uuid_at_probe) survive export/import
+    # roundtrips. When omitted (e.g. a brand-new provider being
+    # imported by hand), the DB layer auto-generates a fresh UUID.
+    uuid_id: uuid.UUID | None = None
 
 
 class ProviderPatch(BaseModel):

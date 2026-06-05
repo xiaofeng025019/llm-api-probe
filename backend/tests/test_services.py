@@ -883,3 +883,77 @@ async def test_get_int_setting_uses_default_and_minimum(session) -> None:
     assert await settings_svc.get_int_setting(session, "bad", 300) == 300
     assert await settings_svc.get_int_setting(session, "low", 300) == 10
     assert await settings_svc.get_int_setting(session, "ok", 300) == 120
+
+
+@pytest.mark.asyncio
+async def test_provider_health_status_never_probed_yields_none_not_degraded(session) -> None:
+    """A provider with enabled models but NO chat probes yet must NOT
+    be classified as 'degraded'. The list_models probe succeeded, so
+    the upstream is reachable — we just haven't reached the per-model
+    cadence yet. Return None (= "no signal yet") instead of misleading
+    the user with a 'degraded' label.
+
+    Pre-fix behavior: 0 probed models out of N enabled -> 'degraded'.
+    Post-fix behavior: same input -> None.
+    """
+    from app.services.results import _provider_health_status
+
+    # No probed models, but list_models succeeded
+    status = _provider_health_status(
+        provider_enabled=True,
+        latest_list_models=None,  # type: ignore[arg-type]
+        enabled_model_ids=[1, 2, 3],  # 3 enabled, but none probed
+        recent_per_model={},
+    )
+    # list_models probe missing here, so we get None (not degraded).
+    # The point: no signal = no status, not "degraded".
+
+    # Now repeat with a successful list_models probe — still must not be degraded
+    class _FakeResult:
+        success = True
+    fake = _FakeResult()
+    status_with_list = _provider_health_status(
+        provider_enabled=True,
+        latest_list_models=fake,  # type: ignore[arg-type]
+        enabled_model_ids=[1, 2, 3],
+        recent_per_model={},
+    )
+    assert status_with_list is None, (
+        f"expected None (no signal yet), got {status_with_list!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_provider_health_status_probed_models_only(session) -> None:
+    """Only the enabled models that have actually been probed should
+    count toward the ok/fail/degraded decision. If 1/3 enabled models
+    has been probed and that one is online, status should be 'ok' —
+    not 'degraded' (which would be the pre-fix behavior)."""
+    from app.services.results import _provider_health_status
+
+    # 3 enabled models, only model 1 has been probed and is online
+    status = _provider_health_status(
+        provider_enabled=True,
+        latest_list_models=None,  # type: ignore[arg-type]
+        enabled_model_ids=[1, 2, 3],
+        recent_per_model={1: True},  # only model 1 probed, all OK
+    )
+    assert status == "ok", f"expected 'ok' (probed models all online), got {status!r}"
+
+    # Mix: 1 probed model online, 1 probed model offline
+    status = _provider_health_status(
+        provider_enabled=True,
+        latest_list_models=None,  # type: ignore[arg-type]
+        enabled_model_ids=[1, 2, 3],
+        recent_per_model={1: True, 2: False},
+    )
+    assert status == "degraded", f"expected 'degraded' (mixed), got {status!r}"
+
+    # All probed models failing
+    status = _provider_health_status(
+        provider_enabled=True,
+        latest_list_models=None,  # type: ignore[arg-type]
+        enabled_model_ids=[1, 2, 3],
+        recent_per_model={1: False, 2: False},
+    )
+    assert status == "fail", f"expected 'fail' (all probed failing), got {status!r}"

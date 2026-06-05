@@ -283,6 +283,17 @@ def _upsert_job(
         with contextlib.suppress(Exception):
             sched.remove_job(job_id)
         return
+    # First-time add: run once right now, then on the interval. This
+    # way the dashboard sees signal for every enabled model within
+    # seconds of a fresh import (or app restart) instead of waiting
+    # the full interval (potentially 10+ minutes for non-favorites).
+    # On a re-upsert (job already exists, e.g. interval changed),
+    # pass next_run_time=None to leave the current schedule alone.
+    try:
+        is_new = sched.get_job(job_id) is None
+    except Exception:
+        is_new = True
+    next_run = datetime.now(UTC) if is_new else None
     trigger = IntervalTrigger(seconds=interval, jitter=5)
     sched.add_job(
         _run_probe,
@@ -293,6 +304,7 @@ def _upsert_job(
         coalesce=True,
         max_instances=1,
         misfire_grace_time=interval * 2,
+        next_run_time=next_run,
     )
 
 

@@ -82,14 +82,33 @@ async def import_(
         for p in await providers_svc.list_providers(session, include_deleted=True)
         if p.deleted_at is not None
     }
+    # Build a uuid -> provider map (across active + soft-deleted) so we
+    # can detect "the import spec's uuid_id already exists in this DB"
+    # and merge into that row instead of failing on a unique constraint.
+    all_providers = await providers_svc.list_providers(session, include_deleted=True)
+    by_uuid: dict[uuid.UUID, Any] = {p.uuid_id: p for p in all_providers}
 
     for spec in body.providers:
         existing_p = existing_active.get(spec.name)
         deleted_p = existing_deleted.get(spec.name)
+        # If the spec carries a uuid_id and it already exists, prefer
+        # that row over the name-based lookup. This is the merge path
+        # for users who import into a target DB that already has the
+        # same provider under a different name (rename + import).
+        existing_uuid = by_uuid.get(spec.uuid_id) if spec.uuid_id is not None else None
+        if existing_uuid is not None and existing_uuid not in (existing_p, deleted_p):
+            # Treat the uuid match as the canonical "existing" row.
+            if existing_uuid.deleted_at is None:
+                existing_p = existing_uuid
+            else:
+                deleted_p = existing_uuid
 
         if existing_p is not None:
-            # Update existing active provider
+            # Update existing active provider. The import spec is the
+            # source of truth — overwrite name too, since the user
+            # may have renamed the provider between export and import.
             patch_data: dict[str, Any] = {
+                "name": spec.name,
                 "base_url": spec.base_url,
                 "interval_seconds": spec.interval_seconds,
                 "timeout_seconds": spec.timeout_seconds,
@@ -106,6 +125,7 @@ async def import_(
             # include_deleted=False, and ProviderPatch has no
             # deleted_at field).
             deleted_p.deleted_at = None
+            deleted_p.name = spec.name
             deleted_p.base_url = spec.base_url
             deleted_p.kind = spec.kind
             deleted_p.interval_seconds = spec.interval_seconds
@@ -130,6 +150,8 @@ async def import_(
                 )
             await providers_svc.create_provider(session, spec)
             created += 1
+    if body.settings:
+        await settings_svc.upsert_settings(session, body.settings)
     if body.settings:
         await settings_svc.upsert_settings(session, body.settings)
 
@@ -219,6 +241,7 @@ async def export_(session: AsyncSession = Depends(get_session)) -> ApiResponse:
     payload = ExportPayload(
         providers=[
             {
+                "uuid_id": str(p.uuid_id),
                 "name": p.name,
                 "kind": p.kind.value,
                 "base_url": p.base_url,

@@ -12,7 +12,11 @@ REGULAR_MODEL_INTERVAL_KEY = "regular_model_interval_seconds"
 FAVORITE_MODEL_FAILURE_CONFIRMATIONS_KEY = "favorite_model_failure_confirmations"
 REGULAR_MODEL_FAILURE_CONFIRMATIONS_KEY = "regular_model_failure_confirmations"
 DEFAULT_FAVORITE_MODEL_INTERVAL_SECONDS = 300
-DEFAULT_REGULAR_MODEL_INTERVAL_SECONDS = 600
+# Non-favorite models are checked less often than favorites to keep
+# upstream API volume reasonable, but not so long that the dashboard
+# has to wait many minutes for signal. 120s strikes a balance: signal
+# within 2 minutes, ~30 calls/model/hour worst case.
+DEFAULT_REGULAR_MODEL_INTERVAL_SECONDS = 120
 DEFAULT_FAVORITE_MODEL_FAILURE_CONFIRMATIONS = 2
 DEFAULT_REGULAR_MODEL_FAILURE_CONFIRMATIONS = 3
 

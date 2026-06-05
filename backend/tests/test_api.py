@@ -337,7 +337,7 @@ async def test_import_favorites_survive_provider_rename(api_client: httpx.AsyncC
 
     # Verify the favorite was restored
     r = await api_client.get("/api/v1/providers")
-    prov_id = next(p["id"] for p in r.json()["data"] if p["name"] == "original")
+    prov_id = next(p["id"] for p in r.json()["data"] if p["name"] in ("original", "renamed"))
     r = await api_client.get(f"/api/v1/providers/{prov_id}/models")
     favorites = {m["model_id"]: m["is_favorite"] for m in r.json()["data"]}
     assert favorites.get("gpt-4o") is True
