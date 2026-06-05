@@ -5,7 +5,9 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import time
 import uuid
+from collections import deque
 from datetime import UTC, datetime
 from typing import Any
 
@@ -18,14 +20,17 @@ from app.core.config import get_settings
 from app.core.http import get_client
 from app.core.sse import get_sse
 from app.db.models import (
+    ErrorCode,
     JobState,
     Model,
+    ProbeResult,
     ProbeTarget,
     Provider,
 )
 from app.db.session import get_session_maker
 from app.db.uuid import uuid_equals
 from app.probers import get_prober
+from app.probers.types import ProbeOutcome
 from app.services import results as results_svc
 from app.services import settings as settings_svc
 from app.services.models import disable_stale, upsert_discovered
@@ -95,6 +100,45 @@ def get_scheduler() -> AsyncIOScheduler:
 
 # ---------- probe job task --------------------------------------------------
 
+# Per-provider sliding-window rate limiter. Each provider gets its own
+# deque of request timestamps; the deque is pruned to the last 60s on
+# each call, and the request is allowed iff the deque has fewer than
+# the configured limit entries.
+#
+# Why sliding-window instead of token-bucket: a sliding window gives
+# the user a precise "no more than N in any 60s" guarantee. A token
+# bucket at 20/minute with a 60s refill would let a brief burst exceed
+# 20 in some 60s windows.
+#
+# Why not a third-party lib: the implementation is ~10 lines, and
+# the in-memory dict means rate limit state doesn't survive a
+# process restart (intentional — counts should reset, not carry over).
+_provider_rate_buckets: dict[uuid.UUID, deque[float]] = {}
+
+
+def _check_provider_rate_limit(provider_uuid: uuid.UUID, limit_per_minute: int) -> tuple[bool, float]:
+    """Sliding-window rate limit per provider.
+
+    Returns (allowed, retry_after_seconds). When allowed, the current
+    timestamp is appended to the bucket. When not allowed,
+    retry_after is how long until the oldest timestamp in the window
+    falls out (>= 0).
+    """
+    now = time.monotonic()
+    cutoff = now - 60.0
+    bucket = _provider_rate_buckets.get(provider_uuid)
+    if bucket is None:
+        bucket = deque()
+        _provider_rate_buckets[provider_uuid] = bucket
+    # Prune timestamps older than 60s
+    while bucket and bucket[0] < cutoff:
+        bucket.popleft()
+    if len(bucket) >= limit_per_minute:
+        retry_after = (bucket[0] + 60.0) - now
+        return False, max(0.0, retry_after)
+    bucket.append(now)
+    return True, 0.0
+
 
 async def _run_probe(
     provider_uuid: uuid.UUID,
@@ -128,6 +172,52 @@ async def _run_probe(
                 model_id_str: str = model.model_id
             else:
                 model_id_str = None  # type: ignore[assignment]
+
+            # Per-provider rate limit (sliding window). When the
+            # limit is hit, we don't actually call upstream — we
+            # record a synthetic `rate_limited` outcome so the
+            # dashboard can show what happened. This protects against
+            # the bursty "Refresh all" + random sweep + user-triggered
+            # probes from overwhelming upstream APIs that already
+            # rate-limit aggressively.
+            rate_limit = await settings_svc.get_int_setting(
+                session,
+                settings_svc.PROVIDER_RATE_LIMIT_KEY,
+                settings_svc.DEFAULT_PROVIDER_RATE_LIMIT_PER_MINUTE,
+                minimum=1,
+                maximum=100,
+            )
+            allowed, retry_after = _check_provider_rate_limit(provider_uuid, rate_limit)
+            if not allowed:
+                outcome = ProbeOutcome(
+                    success=False,
+                    latency_ms=0,
+                    error_code=ErrorCode.rate_limit,
+                    error_message=(
+                        f"local rate limit {rate_limit}/min exceeded; "
+                        f"retry after {retry_after:.1f}s"
+                    ),
+                )
+                row = await results_svc.record_outcome(
+                    session, provider, model.id if model else None, target, outcome
+                )
+                sse = get_sse()
+                await sse.broadcast(
+                    "probe.completed",
+                    {
+                        "id": row.uuid_id,
+                        "provider_id": str(provider_uuid),
+                        "model_id": str(model_uuid) if model_uuid else None,
+                        "target": target.value,
+                        "success": False,
+                        "http_status": None,
+                        "latency_ms": 0,
+                        "ttfb_ms": None,
+                        "error_code": ErrorCode.rate_limit.value,
+                        "checked_at": row.checked_at.isoformat(),
+                    },
+                )
+                return
 
             # Acquire semaphores
             root = get_root_sem()

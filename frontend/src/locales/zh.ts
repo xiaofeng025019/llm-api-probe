@@ -7,6 +7,7 @@ const zh = {
     dashboard: "总览",
     providers: "服务商",
     models: "收藏",
+    errors: "错误",
     settings: "设置",
   },
   common: {
@@ -63,6 +64,28 @@ const zh = {
   errors: {
     network: { title: "网络错误", detail: "请检查连接后重试" },
     action: { title: "操作失败" },
+    title: "错误记录",
+    subtitle: "最近的探针失败。被钉住的错误会一直保留直到你取消。",
+    unknownCode: "未知",
+    loading: "正在加载错误…",
+    empty: {
+      title: "暂无错误",
+      subtitle: "最近的探针失败会显示在这里。",
+    },
+    refresh: {
+      label: "刷新",
+      title: "重新加载错误列表",
+      ariaLabel: "重新加载错误列表",
+    },
+    pin: { title: "钉住此错误，避开保留期清理" },
+    unpin: { title: "取消钉住 — 下一轮保留期清理会删除此行" },
+    openProvider: "打开服务商详情",
+    truncated: "已显示前 ${limit} 条错误。更早的可能已被保留期删除。",
+    toast: {
+      loadFailed: "加载错误失败",
+      pin: "钉住",
+      unpin: "取消钉住",
+    },
   },
   toast: {
     deleted: "已删除",
@@ -352,6 +375,7 @@ const zh = {
       defaultInterval: "默认模型清单更新间隔（秒）",
       favoriteInterval: "重点关注模型状态检测间隔（秒）",
       regularInterval: "普通模型状态检测间隔（秒）",
+      providerRateLimit: "每个服务商每分钟探测次数上限（滑动窗口，1-100）",
       favoriteConfirm: "重点关注模型连续失败确认次数",
       regularConfirm: "普通模型连续失败确认次数",
       defaultTimeout: "默认超时（秒）",

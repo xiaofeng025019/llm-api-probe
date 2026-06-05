@@ -128,6 +128,15 @@ class ProbeResultOut(BaseModel):
     # remains on this probe), or cross-database restore.
     provider_uuid_at_probe: uuid.UUID
     model_uuid_at_probe: uuid.UUID | None = None
+    # String snapshots — for display in the error history page
+    # without requiring a JOIN back to the (possibly hard-deleted)
+    # provider/model rows.
+    provider_name_at_probe: str
+    model_id_at_probe: str | None = None
+    # True if the user pinned this row from the error history page.
+    # Pinned rows survive the daily retention cleanup. Surface pinned
+    # errors at the top of the errors list with a visual indicator.
+    pinned: bool = False
 
 
 class DashboardFavoriteModel(BaseModel):

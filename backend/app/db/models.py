@@ -162,6 +162,14 @@ class ProbeResult(Base):
     model: Mapped[Model | None] = relationship(back_populates="results")
     provider_rel: Mapped[Provider] = relationship(lazy="joined")
 
+    # When True, this error is exempt from the regular retention
+    # cleanup — the user explicitly pinned it from the error history
+    # page. Pinned rows are surfaced at the top of the errors list
+    # and survive the retention_days setting (which deletes the rest).
+    # A successful row having pinned=True is unusual (we only allow
+    # pinning failures) but the column is on the table for simplicity.
+    pinned: Mapped[bool] = mapped_column(default=False, server_default=text("0"))
+
     @property
     def provider_uuid(self) -> uuid.UUID:
         """Return the provider's uuid_id for API responses.

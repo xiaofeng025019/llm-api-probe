@@ -126,7 +126,17 @@ export interface ProbeResult {
   error_code: string | null;
   error_message: string | null;
   checked_at: string;
+  provider_uuid_at_probe: string;
+  model_uuid_at_probe: string | null;
+  provider_name_at_probe: string;
+  model_id_at_probe: string | null;
+  pinned: boolean;
 }
+
+/** One entry in the error history page list. Same shape as
+ *  ProbeResult (so we can reuse formatting) but the list is
+ *  curated: failed-only, pinned-first. */
+export type ErrorEvent = ProbeResult;
 
 /** Shape of the `favorites` entries inside an ExportPayload. */
 export interface FavoriteEntry {
@@ -245,4 +255,16 @@ export const api = {
    *  Returns immediately; results land asynchronously. */
   probeAll: () =>
     request<{ scheduled: number; skipped: number }>("/api/v1/probe/run-all", { method: "POST" }),
+  /** Recent failure list for the error history page. Pinned
+   *  errors float to the top; non-pinned are bounded by the
+   *  server-side retention_days cleanup. */
+  errors: (params: { limit?: number } = {}) => {
+    const q = new URLSearchParams();
+    if (params.limit != null) q.set("limit", String(params.limit));
+    return request<ErrorEvent[]>(`/api/v1/errors?${q.toString()}`);
+  },
+  pinError: (id: string) =>
+    request<{ pinned: boolean }>(`/api/v1/errors/${id}/pin`, { method: "POST" }),
+  unpinError: (id: string) =>
+    request<{ pinned: boolean }>(`/api/v1/errors/${id}/pin`, { method: "DELETE" }),
 };

@@ -9,6 +9,7 @@ const KNOWN_SETTINGS = [
   { key: "default_interval_seconds", descKey: "settingsPage.setting.defaultInterval", defaultValue: "300" },
   { key: "favorite_model_interval_seconds", descKey: "settingsPage.setting.favoriteInterval", defaultValue: "300" },
   { key: "regular_model_interval_seconds", descKey: "settingsPage.setting.regularInterval", defaultValue: "600" },
+  { key: "provider_rate_limit_per_minute", descKey: "settingsPage.setting.providerRateLimit", defaultValue: "20" },
   { key: "favorite_model_failure_confirmations", descKey: "settingsPage.setting.favoriteConfirm", defaultValue: "2" },
   { key: "regular_model_failure_confirmations", descKey: "settingsPage.setting.regularConfirm", defaultValue: "3" },
   { key: "default_timeout_seconds", descKey: "settingsPage.setting.defaultTimeout", defaultValue: "30" },

@@ -152,8 +152,6 @@ async def import_(
             created += 1
     if body.settings:
         await settings_svc.upsert_settings(session, body.settings)
-    if body.settings:
-        await settings_svc.upsert_settings(session, body.settings)
 
     # Restore favorites AFTER providers exist (so we can look them up).
     # set_favorites handles the case where a model row doesn't yet
@@ -308,6 +306,53 @@ async def probe_run_all(session: AsyncSession = Depends(get_session)) -> ApiResp
     """
     scheduled, skipped = await trigger_all_models_now()
     return ApiResponse(data={"scheduled": scheduled, "skipped": skipped})
+
+
+# ---------- Error history ---------------------------------------------------
+
+
+@router.get("/errors", response_model=ApiResponse)
+async def list_errors(
+    limit: int = Query(default=200, ge=1, le=1000),
+    session: AsyncSession = Depends(get_session),
+) -> ApiResponse:
+    """Return the recent failure log for the error history page.
+
+    Pinned errors float to the top regardless of age so the user
+    always sees what they've asked to keep. Non-pinned errors are
+    ordered by recency; they'll be deleted by the daily retention
+    cleanup after `retention_days` (default 30)."""
+    rows = await results_svc.list_recent_errors(session, limit=limit)
+    return ApiResponse(data=[ProbeResultOut.model_validate(r) for r in rows])
+
+
+@router.post("/errors/{probe_uuid}/pin", response_model=ApiResponse)
+async def pin_error(
+    probe_uuid: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+) -> ApiResponse:
+    """Pin an error so it survives the daily retention cleanup and
+    floats to the top of the errors list."""
+    ok = await results_svc.pin_probe_result(session, probe_uuid)
+    if not ok:
+        raise HTTPException(
+            status_code=404,
+            detail="probe result not found or is not a failure (only failed probes can be pinned)",
+        )
+    return ApiResponse(data={"pinned": True})
+
+
+@router.delete("/errors/{probe_uuid}/pin", response_model=ApiResponse)
+async def unpin_error(
+    probe_uuid: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+) -> ApiResponse:
+    """Remove the pinned flag. The row itself stays in the table
+    and will be cleaned up by the regular retention cycle."""
+    ok = await results_svc.unpin_probe_result(session, probe_uuid)
+    if not ok:
+        raise HTTPException(status_code=404, detail="probe result not found")
+    return ApiResponse(data={"pinned": False})
 
 
 @router.get("/events")

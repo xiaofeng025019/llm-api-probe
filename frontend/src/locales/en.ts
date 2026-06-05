@@ -6,6 +6,7 @@ const en = {
     dashboard: "Dashboard",
     providers: "Providers",
     models: "Models",
+    errors: "Errors",
     settings: "Settings",
   },
   common: {
@@ -62,6 +63,28 @@ const en = {
   errors: {
     network: { title: "Network error", detail: "Check your connection and try again" },
     action: { title: "Action failed" },
+    title: "Error history",
+    subtitle: "Recent probe failures. Pinned errors are kept until you remove them.",
+    unknownCode: "unknown",
+    loading: "Loading errors…",
+    empty: {
+      title: "No errors to show",
+      subtitle: "Recent probe failures will appear here.",
+    },
+    refresh: {
+      label: "Refresh",
+      title: "Reload the error list",
+      ariaLabel: "Reload the error list",
+    },
+    pin: { title: "Pin this error so it survives the retention cleanup" },
+    unpin: { title: "Unpin — the row will be deleted by the next retention cleanup" },
+    openProvider: "Open provider detail",
+    truncated: "Showing the first ${limit} errors. Older ones may have been deleted by retention.",
+    toast: {
+      loadFailed: "Failed to load errors",
+      pin: "Pin",
+      unpin: "Unpin",
+    },
   },
   toast: {
     deleted: "Deleted",
@@ -351,6 +374,7 @@ const en = {
       defaultInterval: "Default model list refresh interval (s)",
       favoriteInterval: "Favorite model probe interval (s)",
       regularInterval: "Regular model probe interval (s)",
+      providerRateLimit: "Per-provider probes per minute (sliding window, 1-100)",
       favoriteConfirm: "Consecutive failures to confirm a favorite model as down",
       regularConfirm: "Consecutive failures to confirm a regular model as down",
       defaultTimeout: "Default per-probe timeout (s)",

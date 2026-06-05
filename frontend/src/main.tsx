@@ -6,6 +6,7 @@ import { ProvidersPage } from "./pages/ProvidersPage";
 import { ProviderDetailPage } from "./pages/ProviderDetailPage";
 import { ModelsPage } from "./pages/ModelsPage";
 import { SettingsPage } from "./pages/SettingsPage";
+import { ErrorsPage } from "./pages/ErrorsPage";
 import { ThemeToggle } from "./components/ThemeToggle";
 import { LanguageToggle } from "./components/LanguageToggle";
 import { ToastHost, pushToast } from "./components/Toast";
@@ -49,6 +50,7 @@ function App() {
               {t("nav.dashboard")}
             </NavLink>
             <NavLink to="/providers">{t("nav.providers")}</NavLink>
+            <NavLink to="/errors">{t("nav.errors")}</NavLink>
             <NavLink to="/settings">{t("nav.settings")}</NavLink>
           </nav>
           <div className="spacer" />
@@ -61,6 +63,7 @@ function App() {
             <Route path="/providers" element={<ProvidersPage />} />
             <Route path="/providers/:id" element={<ProviderDetailPage />} />
             <Route path="/models" element={<ModelsPage />} />
+            <Route path="/errors" element={<ErrorsPage />} />
             <Route path="/settings" element={<SettingsPage />} />
           </Routes>
         </main>

@@ -151,12 +151,73 @@ async def list_results(
     return list(res.scalars().all())
 
 
+async def list_recent_errors(
+    session: AsyncSession,
+    limit: int = 200,
+) -> list[ProbeResult]:
+    """Return failed probe results for the error history page.
+
+    Pinned rows float to the top regardless of recency, ordered
+    by `checked_at DESC` among themselves; non-pinned rows are
+    ordered by `checked_at DESC` below them. The list is bounded
+    by `limit` total rows.
+    """
+    # SQLite's CASE expression maps to ORDER BY.
+    pinned_first = (ProbeResult.pinned.is_(True)).desc()
+    stmt = (
+        select(ProbeResult)
+        .options(joinedload(ProbeResult.model), joinedload(ProbeResult.provider_rel))
+        .where(ProbeResult.success.is_(False))
+        .order_by(pinned_first, ProbeResult.checked_at.desc())
+        .limit(limit)
+    )
+    res = await session.execute(stmt)
+    return list(res.scalars().all())
+
+
+async def pin_probe_result(session: AsyncSession, probe_uuid: uuid.UUID) -> bool:
+    """Mark a probe_result as pinned. Only failure rows can be pinned
+    (a "pinned success" is meaningless — there's nothing to track)."""
+    res = await session.execute(
+        select(ProbeResult).where(uuid_equals(ProbeResult.uuid_id, probe_uuid))
+    )
+    row = res.scalar_one_or_none()
+    if row is None or row.success:
+        return False
+    row.pinned = True
+    await session.commit()
+    return True
+
+
+async def unpin_probe_result(session: AsyncSession, probe_uuid: uuid.UUID) -> bool:
+    """Remove the pinned flag. The row itself stays in the table; the
+    regular retention cleanup will eventually delete it."""
+    res = await session.execute(
+        select(ProbeResult).where(uuid_equals(ProbeResult.uuid_id, probe_uuid))
+    )
+    row = res.scalar_one_or_none()
+    if row is None:
+        return False
+    row.pinned = False
+    await session.commit()
+    return True
+
+
 async def cleanup_old(session: AsyncSession, retention_days: int) -> int:
     # SQLite returns naive datetimes from the column; compare with naive "now"
     # to avoid offset-aware vs naive comparison errors.
     now = datetime.now(UTC).replace(tzinfo=None)
     cutoff = now - timedelta(days=retention_days)
-    res = await session.execute(delete(ProbeResult).where(ProbeResult.checked_at < cutoff))
+    # Pinned rows are exempt from retention cleanup — the user
+    # explicitly asked to keep them. Without this filter, a pinned
+    # error the user cares about would silently disappear after
+    # `retention_days`, and the pin becomes meaningless.
+    res = await session.execute(
+        delete(ProbeResult).where(
+            ProbeResult.checked_at < cutoff,
+            ProbeResult.pinned.is_(False),
+        )
+    )
     await session.commit()
     return getattr(res, "rowcount", 0)
 

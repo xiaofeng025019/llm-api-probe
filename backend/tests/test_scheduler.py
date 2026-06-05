@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import uuid as _uuid
+
 import httpx
 import pytest
 import respx
@@ -193,3 +195,81 @@ async def test_ensure_random_sweep_job_is_idempotent(env) -> None:
     sched_mod._ensure_random_sweep_job(sched)
     matches = [j for j in sched.get_jobs() if j.id == "background:random_probe_sweep"]
     assert len(matches) == 1
+
+
+def test_provider_rate_limit_sliding_window() -> None:
+    """_check_provider_rate_limit must allow up to N requests in any
+    60s window, then reject until the oldest timestamp ages out."""
+    import time as _time
+    from app.core.scheduler import (
+        _check_provider_rate_limit,
+        _provider_rate_buckets,
+    )
+    test_uuid = _uuid.uuid4()
+    _provider_rate_buckets.pop(test_uuid, None)
+
+    for i in range(5):
+        allowed, retry = _check_provider_rate_limit(test_uuid, limit_per_minute=5)
+        assert allowed, f"call {i+1} should be allowed (limit=5)"
+        assert retry == 0.0
+
+    allowed, retry = _check_provider_rate_limit(test_uuid, limit_per_minute=5)
+    assert not allowed
+    assert retry > 0
+
+    _provider_rate_buckets.pop(test_uuid, None)
+
+
+def test_provider_rate_limit_per_provider_isolation() -> None:
+    """Each provider has its own bucket — hitting the limit on one
+    must not affect another provider."""
+    from app.core.scheduler import (
+        _check_provider_rate_limit,
+        _provider_rate_buckets,
+    )
+    a, b = _uuid.uuid4(), _uuid.uuid4()
+    _provider_rate_buckets.pop(a, None)
+    _provider_rate_buckets.pop(b, None)
+
+    for _ in range(3):
+        allowed, _ = _check_provider_rate_limit(a, limit_per_minute=3)
+        assert allowed
+    allowed, _ = _check_provider_rate_limit(a, limit_per_minute=3)
+    assert not allowed
+
+    allowed, _ = _check_provider_rate_limit(b, limit_per_minute=3)
+    assert allowed
+
+    _provider_rate_buckets.pop(a, None)
+    _provider_rate_buckets.pop(b, None)
+
+
+@pytest.mark.asyncio
+async def test_run_probe_rate_limited_records_synthetic_outcome(env) -> None:
+    """When the per-provider rate limit is hit, _run_probe must NOT
+    call upstream — it records a synthetic `rate_limited` outcome
+    and returns."""
+    import time as _time
+    from collections import deque
+    from app.core import scheduler as sched_mod
+
+    # Pre-fill the bucket to the limit so the next call is rate-limited
+    sched_mod._provider_rate_buckets[env["provider_id"]] = deque(
+        [_time.monotonic()] * 5
+    )
+    async with env["sm"]() as s:
+        await settings_svc.upsert_settings(s, {"provider_rate_limit_per_minute": "5"})
+
+    # No respx mock — if _run_probe actually called upstream, the
+    # httpx default client would raise (no respx) and we'd see a
+    # different error_code than rate_limit.
+    await _run_probe(env["provider_id"], None, ProbeTarget.list_models, env["sm"])
+
+    async with env["sm"]() as s:
+        row = (await s.execute(ProbeResult.__table__.select())).first()
+        assert row is not None
+        assert row.success == 0
+        assert row.error_code == "rate_limit"
+        assert "rate limit" in (row.error_message or "")
+
+    sched_mod._provider_rate_buckets.pop(env["provider_id"], None)

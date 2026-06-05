@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import uuid as _uuid
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -886,6 +887,36 @@ async def test_get_int_setting_uses_default_and_minimum(session) -> None:
 
 
 @pytest.mark.asyncio
+async def test_get_int_setting_clamps_to_maximum(session) -> None:
+    """A maximum bound (used for the rate-limit knob) must clamp
+    out-of-range values down to the ceiling, not just the floor."""
+    # Above the max → clamped to max
+    await settings_svc.upsert_settings(session, {"too_high": "5000"})
+    assert (
+        await settings_svc.get_int_setting(
+            session, "too_high", 300, minimum=1, maximum=100
+        )
+        == 100
+    )
+    # In range → unchanged
+    await settings_svc.upsert_settings(session, {"just_right": "42"})
+    assert (
+        await settings_svc.get_int_setting(
+            session, "just_right", 300, minimum=1, maximum=100
+        )
+        == 42
+    )
+    # Below the min → clamped to min (still applies)
+    await settings_svc.upsert_settings(session, {"too_low": "0"})
+    assert (
+        await settings_svc.get_int_setting(
+            session, "too_low", 300, minimum=1, maximum=100
+        )
+        == 1
+    )
+
+
+@pytest.mark.asyncio
 async def test_provider_health_status_never_probed_yields_none_not_degraded(session) -> None:
     """A provider with enabled models but NO chat probes yet must NOT
     be classified as 'degraded'. The list_models probe succeeded, so
@@ -957,3 +988,130 @@ async def test_provider_health_status_probed_models_only(session) -> None:
         recent_per_model={1: False, 2: False},
     )
     assert status == "fail", f"expected 'fail' (all probed failing), got {status!r}"
+
+
+@pytest.mark.asyncio
+async def test_pin_unpin_probe_result(session) -> None:
+    """Pin a failure row, verify it sticks, then unpin."""
+    p = await providers_svc.create_provider(
+        session,
+        ProviderCreate(
+            name="p1",
+            kind=ProviderKind.openai,
+            base_url="https://api.openai.com",
+            api_key="k",
+        ),
+    )
+    failed = await results_svc.record_outcome(
+        session, p, None, ProbeTarget.list_models,
+        ProbeOutcome(success=False, http_status=500, error_code=ErrorCode.server),
+    )
+    successful = await results_svc.record_outcome(
+        session, p, None, ProbeTarget.list_models,
+        ProbeOutcome(success=True, http_status=200, latency_ms=42),
+    )
+    # Pinning a failure works
+    assert await results_svc.pin_probe_result(session, failed.uuid_id) is True
+    # Pinning a success returns False (meaningless semantically)
+    assert await results_svc.pin_probe_result(session, successful.uuid_id) is False
+    # Pinning a non-existent row returns False
+    assert await results_svc.pin_probe_result(session, _uuid.uuid4()) is False
+    # Unpinning the pinned row works
+    assert await results_svc.unpin_probe_result(session, failed.uuid_id) is True
+    # Verify the row's pinned column is now False
+    rows = (await session.execute(
+        ProbeResult.__table__.select().where(ProbeResult.uuid_id == failed.uuid_id)
+    )).all()
+    assert rows[0].pinned == 0
+
+
+@pytest.mark.asyncio
+async def test_list_recent_errors_pinned_first(session) -> None:
+    """Pinned errors must sort to the top regardless of recency."""
+    p = await providers_svc.create_provider(
+        session,
+        ProviderCreate(
+            name="p1",
+            kind=ProviderKind.openai,
+            base_url="https://api.openai.com",
+            api_key="k",
+        ),
+    )
+    # Three failures
+    a = await results_svc.record_outcome(
+        session, p, None, ProbeTarget.list_models,
+        ProbeOutcome(success=False, http_status=500, error_code=ErrorCode.server),
+    )
+    b = await results_svc.record_outcome(
+        session, p, None, ProbeTarget.list_models,
+        ProbeOutcome(success=False, http_status=502, error_code=ErrorCode.server),
+    )
+    c = await results_svc.record_outcome(
+        session, p, None, ProbeTarget.list_models,
+        ProbeOutcome(success=False, http_status=503, error_code=ErrorCode.server),
+    )
+    # Pin the OLDEST one (a) — it should still come first
+    assert await results_svc.pin_probe_result(session, a.uuid_id) is True
+
+    rows = await results_svc.list_recent_errors(session, limit=10)
+    uuids = [r.uuid_id for r in rows]
+    # a is pinned, must be at index 0
+    assert uuids[0] == a.uuid_id
+    # b, c are not pinned, ordered by recency (c first since it was last)
+    assert uuids[1] == c.uuid_id
+    assert uuids[2] == b.uuid_id
+
+
+@pytest.mark.asyncio
+async def test_cleanup_old_skips_pinned(session) -> None:
+    """Pinned rows must NOT be deleted by the retention cleanup.
+    Otherwise the pin is meaningless — the user pinned something
+    and it silently disappeared after `retention_days`."""
+    from datetime import UTC, datetime, timedelta
+    p = await providers_svc.create_provider(
+        session,
+        ProviderCreate(
+            name="p1",
+            kind=ProviderKind.openai,
+            base_url="https://api.openai.com",
+            api_key="k",
+        ),
+    )
+    pinned = await results_svc.record_outcome(
+        session, p, None, ProbeTarget.list_models,
+        ProbeOutcome(success=False, http_status=500, error_code=ErrorCode.server),
+    )
+    not_pinned = await results_svc.record_outcome(
+        session, p, None, ProbeTarget.list_models,
+        ProbeOutcome(success=False, http_status=500, error_code=ErrorCode.server),
+    )
+    # Pin one of them
+    assert await results_svc.pin_probe_result(session, pinned.uuid_id) is True
+
+    # Backdate BOTH rows to 100 days ago
+    old = datetime.now(UTC).replace(tzinfo=None) - timedelta(days=100)
+    await session.execute(
+        ProbeResult.__table__.update()
+        .where(ProbeResult.uuid_id == pinned.uuid_id)
+        .values(checked_at=old)
+    )
+    await session.execute(
+        ProbeResult.__table__.update()
+        .where(ProbeResult.uuid_id == not_pinned.uuid_id)
+        .values(checked_at=old)
+    )
+    await session.commit()
+
+    # Run cleanup with a 30-day window. Should delete only the
+    # non-pinned row.
+    removed = await results_svc.cleanup_old(session, retention_days=30)
+    assert removed == 1, f"expected exactly 1 row deleted, got {removed}"
+
+    # Verify: the pinned row is still there, the non-pinned one is gone
+    rows = (await session.execute(
+        ProbeResult.__table__.select().where(
+            ProbeResult.uuid_id.in_([pinned.uuid_id, not_pinned.uuid_id])
+        )
+    )).all()
+    assert len(rows) == 1
+    assert rows[0].uuid_id == pinned.uuid_id
