@@ -1,6 +1,6 @@
 # API Reference
 
-Base URL: `http://127.0.0.1:8000/api/v1`
+Base URL: `http://127.0.0.1:6200/api/v1`
 
 All endpoints return a unified envelope:
 
@@ -24,8 +24,8 @@ Errors are also reflected in HTTP status:
 | `502` | Upstream provider failed |
 | `500` | Internal server error |
 
-The FastAPI auto-generated OpenAPI schema is at `http://127.0.0.1:8000/docs`
-(Swagger UI) and `http://127.0.0.1:8000/openapi.json` (raw schema).
+The FastAPI auto-generated OpenAPI schema is at `http://127.0.0.1:6200/docs`
+(Swagger UI) and `http://127.0.0.1:6200/openapi.json` (raw schema).
 
 ---
 

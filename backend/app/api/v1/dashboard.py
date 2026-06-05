@@ -19,6 +19,7 @@ from app.schemas.api import (
     ApiResponse,
     DashboardOut,
     ExportPayload,
+    FavoriteEntry,
     ImportPayload,
     ProbeResultOut,
     ProviderPatch,
@@ -132,20 +133,57 @@ async def import_(
     if body.settings:
         await settings_svc.upsert_settings(session, body.settings)
 
-    # Restore favorites AFTER providers exist (so we can look them up
-    # by name). set_favorites handles the case where a model row
-    # doesn't yet exist on this DB (e.g. fresh import before any
-    # /v1/models sync) by creating a placeholder row.
-    if body.favorites_by_provider:
-        existing = {p.name: p for p in await providers_svc.list_providers(session)}
-        for prov_name, model_ids in body.favorites_by_provider.items():
-            prov = existing.get(prov_name)
+    # Restore favorites AFTER providers exist (so we can look them up).
+    # set_favorites handles the case where a model row doesn't yet
+    # exist on this DB (e.g. fresh import before any /v1/models sync)
+    # by creating a placeholder row.
+    #
+    # Lookup strategy: try uuid first (stable across renames), fall back
+    # to name (works for legacy exports that didn't include uuid).
+    if body.favorites or body.favorites_by_provider:
+        all_providers = await providers_svc.list_providers(session, include_deleted=True)
+        # Build lookup maps. Use include_deleted=True so a soft-deleted
+        # provider that the import re-created can still be found.
+        providers_by_uuid: dict[uuid.UUID, Any] = {p.uuid_id: p for p in all_providers}
+        providers_by_name: dict[str, Any] = {p.name: p for p in all_providers}
+
+        # Dedupe by (provider_uuid, name) so the same provider isn't
+        # processed twice when the export has both formats pointing to
+        # it.
+        seen: set[tuple[str, str]] = set()
+
+        # 1. Process the new (rich) format first.
+        for entry in body.favorites:
+            prov = None
+            if entry.provider_uuid is not None and entry.provider_uuid in providers_by_uuid:
+                prov = providers_by_uuid[entry.provider_uuid]
+            elif entry.provider_name in providers_by_name:
+                prov = providers_by_name[entry.provider_name]
+
             if prov is None:
-                # Provider declared in favorites but not in providers list
-                # — skip silently. The user gets a 0 in the
-                # favorites_restored count and the export's `providers`
-                # field is the source of truth.
+                # Provider declared in favorites but not in providers
+                # list — skip silently. The export's `providers` field
+                # is the source of truth; favorites alone can't
+                # recreate a provider.
                 continue
+
+            key = (str(prov.uuid_id), prov.name)
+            if key in seen:
+                continue
+            seen.add(key)
+            favorites_restored += await models_svc.set_favorites(
+                session, prov.uuid_id, entry.model_ids
+            )
+
+        # 2. Process the legacy format for any provider we haven't seen yet.
+        for prov_name, model_ids in body.favorites_by_provider.items():
+            prov = providers_by_name.get(prov_name)
+            if prov is None:
+                continue
+            key = (str(prov.uuid_id), prov.name)
+            if key in seen:
+                continue
+            seen.add(key)
             favorites_restored += await models_svc.set_favorites(session, prov.uuid_id, model_ids)
 
     await sync_all_jobs()
@@ -162,14 +200,21 @@ async def import_(
 async def export_(session: AsyncSession = Depends(get_session)) -> ApiResponse:
     providers = await providers_svc.list_providers(session)
     settings = await settings_svc.list_settings(session)
-    # Collect favorite model_ids per provider name so the import side
-    # can restore is_favorite on the right model. Keyed by name (not
-    # id) because the import creates new providers and only knows
-    # names at that point.
+    # Collect favorites in the new (uuid+name) format. We also emit
+    # the legacy name-keyed map for backward compat with older
+    # importers. On import, the new format takes precedence.
+    favorites: list[FavoriteEntry] = []
     favorites_by_provider: dict[str, list[str]] = {}
     for p in providers:
         favs = [m.model_id for m in await models_svc.list_models(session, p.uuid_id) if m.is_favorite]
         if favs:
+            favorites.append(
+                FavoriteEntry(
+                    provider_uuid=p.uuid_id,
+                    provider_name=p.name,
+                    model_ids=favs,
+                )
+            )
             favorites_by_provider[p.name] = favs
     payload = ExportPayload(
         providers=[
@@ -188,6 +233,7 @@ async def export_(session: AsyncSession = Depends(get_session)) -> ApiResponse:
             }
             for p in providers
         ],
+        favorites=favorites,
         favorites_by_provider=favorites_by_provider,
         settings={s.key: s.value for s in settings},
     )

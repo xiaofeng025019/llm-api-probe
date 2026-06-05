@@ -7,19 +7,19 @@ services:
     container_name: llm-usability
     restart: unless-stopped
     ports:
-      - "127.0.0.1:8000:8000"
+      - "127.0.0.1:6200:6200"
     volumes:
       - ./data:/app/data
       - ./.env:/app/.env:ro
     environment:
       APP_HOST: 0.0.0.0
-      APP_PORT: "8000"
+      APP_PORT: "6200"
       DATABASE_URL: sqlite+aiosqlite:////app/data/llm_usability.db
       SYNC_DATABASE_URL: sqlite:////app/data/llm_usability.db
       LOG_LEVEL: INFO
       TZ: Asia/Shanghai
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request,sys; r=urllib.request.urlopen('http://127.0.0.1:8000/api/v1/healthz',timeout=3); sys.exit(0 if r.status==200 else 1)"]
+      test: ["CMD", "python", "-c", "import urllib.request,sys; r=urllib.request.urlopen('http://127.0.0.1:6200/api/v1/healthz',timeout=3); sys.exit(0 if r.status==200 else 1)"]
       interval: 30s
       timeout: 5s
       retries: 3

@@ -38,7 +38,7 @@ uv run ruff format --check
 uv run mypy app
 
 # Auto-migrate DB and start dev server
-uv run uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
+uv run uvicorn app.main:app --host 127.0.0.1 --port 6200 --reload
 ```
 
 ### Frontend
@@ -47,7 +47,7 @@ uv run uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
 cd frontend
 pnpm install
 
-# Dev server (proxies /api to :8000)
+# Dev server (proxies /api to :6200)
 pnpm dev
 
 # Production build

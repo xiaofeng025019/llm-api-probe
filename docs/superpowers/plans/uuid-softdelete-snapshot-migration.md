@@ -125,7 +125,7 @@
 
 5. **验收标准**:
    - `pytest tests/test_api.py` 全部通过（更新测试中的 ID 类型）
-   - 手动测试: `curl http://localhost:8000/api/v1/providers/{uuid}` 返回正确数据
+   - 手动测试: `curl http://localhost:6200/api/v1/providers/{uuid}` 返回正确数据
 
 **提交**: `feat(api): migrate to UUID parameters and responses`
 

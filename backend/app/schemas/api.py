@@ -193,20 +193,41 @@ class SettingPut(BaseModel):
 # ---------- Import/Export ---------------------------------------------------
 
 
+class FavoriteEntry(BaseModel):
+    """One provider's favorites in an export/import payload.
+
+    Carries BOTH the provider's stable UUID and its (possibly renamed)
+    display name so the import side can:
+
+    1. Resolve the current provider row by UUID (survives rename).
+    2. Fall back to name-based lookup if the UUID is missing (older
+       export files, or UUID never exported).
+    """
+
+    provider_uuid: uuid.UUID | None = None
+    provider_name: str
+    model_ids: list[str] = Field(default_factory=list)
+
+
 class ImportPayload(BaseModel):
     providers: list[ProviderCreate] = Field(default_factory=list)
     settings: dict[str, str] = Field(default_factory=dict)
-    # provider name (case-sensitive match against the providers above)
-    # → list of model_id strings to mark as is_favorite on import. New
-    # providers are imported first; favorite restoration happens after
-    # so model lookups don't race.
+    # New (preferred) format: list of {provider_uuid, provider_name, model_ids}.
+    # Import looks up by uuid first, falls back to name. Survives rename.
+    favorites: list[FavoriteEntry] = Field(default_factory=list)
+    # Legacy format: { provider_name: [model_id, ...] }.
+    # Kept for backward compat with older export files. New exports
+    # populate the `favorites` field instead. On import, both fields
+    # are processed; the `favorites` field takes precedence.
     favorites_by_provider: dict[str, list[str]] = Field(default_factory=dict)
 
 
 class ExportPayload(BaseModel):
     providers: list[dict[str, Any]]
-    # Same shape as ImportPayload.favorites_by_provider: a flat map
-    # so the export is self-describing and older clients (without
-    # favorite support) can still load it.
+    # New (preferred) format. Each entry carries the provider's UUID
+    # so an import on a renamed or re-created provider still works.
+    favorites: list[FavoriteEntry] = Field(default_factory=list)
+    # Legacy format. Emitted alongside the new field for backward compat
+    # with older importers. May be removed in a future major version.
     favorites_by_provider: dict[str, list[str]] = Field(default_factory=dict)
     settings: dict[str, str]

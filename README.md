@@ -28,7 +28,7 @@ git clone <repo-url> llm-usability
 cd llm-usability
 cp .env.example .env          # optional
 docker compose up -d
-# open http://127.0.0.1:8000
+# open http://127.0.0.1:6200
 ```
 
 Data persists in `./data/llm_usability.db`; scheduler state in the same file.
@@ -48,18 +48,18 @@ cd ..
 
 # Run
 cd backend
-uv run uvicorn app.main:app --host 127.0.0.1 --port 8000
+uv run uvicorn app.main:app --host 127.0.0.1 --port 6200
 ```
 
 ### Development mode (hot reload)
 
 ```bash
 # Terminal 1
-cd backend && uv run uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
+cd backend && uv run uvicorn app.main:app --host 127.0.0.1 --port 6200 --reload
 
 # Terminal 2
 cd frontend && pnpm dev
-# Vite at http://localhost:5173, proxies /api to :8000
+# Vite at http://localhost:5173, proxies /api to :6200
 ```
 
 ## Screenshots

@@ -12,7 +12,7 @@ probes upstream LLM providers over HTTP.
 └───────────────────────────────┬──────────────────────────────┘
                                 │ HTTPS (loopback)
 ┌───────────────────────────────▼──────────────────────────────┐
-│  FastAPI process (uvicorn @ 127.0.0.1:8000)                  │
+│  FastAPI process (uvicorn @ 127.0.0.1:6200)                  │
 │  ┌──────────────┐  ┌──────────────┐  ┌──────────────────┐     │
 │  │ REST API     │  │ APScheduler  │  │ StaticFiles      │     │
 │  │ /api/v1/*    │  │ (in-process) │  │ frontend/dist/   │     │
@@ -34,7 +34,7 @@ probes upstream LLM providers over HTTP.
 
 A single `uvicorn` process owns:
 
-- The **HTTP server** (Starlette/FastAPI) bound to `127.0.0.1:8000`.
+- The **HTTP server** (Starlette/FastAPI) bound to `127.0.0.1:6200`.
 - An **APScheduler** `AsyncIOScheduler` running on the same event loop.
   Job store is SQLite (via `SQLAlchemyJobStore`) so jobs survive restarts.
 - A **global `httpx.AsyncClient`** (HTTP/2, connection pool) used by all
@@ -264,13 +264,13 @@ Docker Compose runs one service:
 services:
   app:
     build: .
-    ports: ["127.0.0.1:8000:8000"]    # loopback only
+    ports: ["127.0.0.1:6200:6200"]    # loopback only
     volumes:
       - ./data:/app/data              # SQLite
       - ./.env:/app/.env:ro
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/healthz"]
+      test: ["CMD", "curl", "-f", "http://localhost:6200/api/v1/healthz"]
       interval: 30s
 ```
 

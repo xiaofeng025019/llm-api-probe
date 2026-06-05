@@ -79,7 +79,7 @@ class Provider(Base):
     )
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, default=None)
 
-    models: Mapped[list[Model]] = relationship(back_populates="provider", cascade="all, delete-orphan")
+    models: Mapped[list[Model]] = relationship(back_populates="provider", cascade="save-update, merge, refresh-expire")
 
 
 class Model(Base):
@@ -111,7 +111,7 @@ class Model(Base):
         assert self.provider is not None
         return self.provider.uuid_id
 
-    results: Mapped[list[ProbeResult]] = relationship(back_populates="model", cascade="all, delete-orphan")
+    results: Mapped[list[ProbeResult]] = relationship(back_populates="model", cascade="save-update, merge, refresh-expire")
 
 
 class ProbeResult(Base):
@@ -133,7 +133,7 @@ class ProbeResult(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     uuid_id: Mapped[uuid.UUID] = mapped_column(Uuid, unique=True, index=True, default=uuid.uuid4)
-    provider_id: Mapped[int] = mapped_column(ForeignKey("providers.id", ondelete="CASCADE"))
+    provider_id: Mapped[int | None] = mapped_column(ForeignKey("providers.id", ondelete="SET NULL"), nullable=True)
     model_id: Mapped[int | None] = mapped_column(ForeignKey("models.id", ondelete="SET NULL"), nullable=True)
     target: Mapped[ProbeTarget] = mapped_column(SAEnum(ProbeTarget))
     success: Mapped[bool]

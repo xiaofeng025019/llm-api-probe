@@ -128,6 +128,33 @@ export interface ProbeResult {
   checked_at: string;
 }
 
+/** Shape of the `favorites` entries inside an ExportPayload. */
+export interface FavoriteEntry {
+  provider_uuid: string | null;
+  provider_name: string;
+  model_ids: string[];
+}
+
+/** Shape of the export/import payload. Both `favorites` (new, uuid-keyed)
+ *  and `favorites_by_provider` (legacy, name-keyed) are accepted on
+ *  import. On export, both are emitted. */
+export interface ExportPayload {
+  providers: Array<{
+    name: string;
+    kind: ProviderKind;
+    base_url: string;
+    api_key: string;
+    proxy: string | null;
+    enabled: boolean;
+    interval_seconds: number;
+    timeout_seconds: number;
+    headers_json: string | null;
+  }>;
+  favorites: FavoriteEntry[];
+  favorites_by_provider: Record<string, string[]>;
+  settings: Record<string, string>;
+}
+
 export interface Setting {
   key: string;
   value: string;
@@ -198,8 +225,8 @@ export const api = {
       body: JSON.stringify({ items }),
     }),
   exportConfig: () =>
-    request<unknown>("/api/v1/export", { method: "POST" }),
-  importConfig: (payload: unknown) =>
+    request<ExportPayload>("/api/v1/export", { method: "POST" }),
+  importConfig: (payload: ExportPayload | unknown) =>
     request<{ providers_created: number; providers_updated: number }>(
       "/api/v1/import",
       { method: "POST", body: JSON.stringify(payload) },

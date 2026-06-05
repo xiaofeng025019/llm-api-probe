@@ -13,7 +13,7 @@ This repository is a local LLM provider availability monitor with a Python backe
 ## Build, Test, and Development Commands
 
 - `cd backend && uv sync` installs backend dependencies.
-- `cd backend && uv run uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload` runs the backend API in development mode.
+- `cd backend && uv run uvicorn app.main:app --host 127.0.0.1 --port 6200 --reload` runs the backend API in development mode.
 - `cd frontend && pnpm install` installs frontend dependencies.
 - `cd frontend && pnpm dev` runs Vite at `http://localhost:5173` with `/api` proxied to the backend.
 - `cd frontend && pnpm build` type-checks and builds the production frontend bundle.

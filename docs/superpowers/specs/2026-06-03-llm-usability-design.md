@@ -51,9 +51,9 @@
 │       │ Adapters    │                                    │
 │       └─────────────┘                                    │
 └─────────────────────────────────────────────────────────┘
-   localhost:8000
-   浏览器 → http://localhost:8000/  → React SPA
-                → http://localhost:8000/api/v1/*  → JSON
+   localhost:6200
+   浏览器 → http://localhost:6200/  → React SPA
+                → http://localhost:6200/api/v1/*  → JSON
 ```
 
 - **FastAPI** 通过 `lifespan` 启动时初始化 DB、调度器、provider 适配器。
@@ -307,7 +307,7 @@ frontend/
 - `pnpm build` → `frontend/dist/`。
 - 后端 `app.mount("/", StaticFiles(directory="frontend/dist", html=True))` 兜底 SPA。
 
-**开发态**：`vite.config.ts` 配 `server.proxy: { "/api": "http://localhost:8000" }`。
+**开发态**：`vite.config.ts` 配 `server.proxy: { "/api": "http://localhost:6200" }`。
 
 ## 9. 部署
 
@@ -333,7 +333,7 @@ llm_usability/
 - 卷挂载：
   - `./data:/app/data`（SQLite + 调度持久化）
   - `./.env:/app/.env:ro`
-- 端口：`127.0.0.1:8000:8000`。
+- 端口：`127.0.0.1:6200:6200`。
 - 重启策略：`unless-stopped`。
 - 健康检查：`GET /healthz`，间隔 30s。
 
@@ -341,13 +341,13 @@ llm_usability/
 ```bash
 cd backend && uv sync
 cd ../frontend && pnpm install && pnpm build && cd ..
-uv run uvicorn app.main:app --host 127.0.0.1 --port 8000
+uv run uvicorn app.main:app --host 127.0.0.1 --port 6200
 ```
 
 ### 9.4 .env
 ```
 APP_HOST=127.0.0.1
-APP_PORT=8000
+APP_PORT=6200
 DATABASE_URL=sqlite+aiosqlite:///./app/data/llm_usability.db
 LOG_LEVEL=INFO
 DEFAULT_INTERVAL_SECONDS=300
