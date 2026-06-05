@@ -24,7 +24,12 @@ export function ToastHost() {
   useEffect(() => {
     const onPush = (e: Event) => {
       const t = (e as CustomEvent<Toast>).detail;
-      setItems((cur) => [...cur, t]);
+      setItems((cur) => {
+        const withoutDuplicate = cur.filter(
+          (x) => !(x.kind === t.kind && x.title === t.title && x.detail === t.detail),
+        );
+        return [...withoutDuplicate, t].slice(-3);
+      });
       setTimeout(() => {
         setItems((cur) => cur.filter((x) => x.id !== t.id));
       }, 4500);

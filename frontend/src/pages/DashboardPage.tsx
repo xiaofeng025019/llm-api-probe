@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import { useDashboard } from "../hooks/useDashboard";
 import {
@@ -11,12 +11,13 @@ import {
   statusColor,
 } from "../lib/format";
 import { modelStatusIntervalLabel, modelStatusIntervalValue } from "../lib/settings";
-import { api, type DashboardFavoriteModel, type Provider } from "../api/types";
+import { api, type DashboardFavoriteModel, type DashboardProvider, type Provider } from "../api/types";
 import { withErrorToast } from "../lib/action";
 import {
   IconPlay,
   IconRefresh,
   IconDelete,
+  IconEdit,
   IconPlus,
   IconServer,
   IconCheck,
@@ -69,28 +70,20 @@ function errorSummary(counts: Record<string, number>): string {
 export function DashboardPage() {
   const nav = useNavigate();
   const t = useT();
-  const { dashboard, providers, settings, loading, error, refresh } = useDashboard();
+  const { dashboard, settings, loading, error, refresh } = useDashboard(true, {
+    loadModels: false,
+    loadProviders: false,
+  });
   const [runningProviders, setRunningProviders] = useState<Record<string, boolean>>({});
+  const [syncingProviders, setSyncingProviders] = useState<Record<string, boolean>>({});
+  const [togglingProviders, setTogglingProviders] = useState<Record<string, boolean>>({});
   const [showAddProvider, setShowAddProvider] = useState(false);
+  const [editingProvider, setEditingProvider] = useState<Provider | null>(null);
   const [refreshingAll, setRefreshingAll] = useState(false);
   const activeDashboardProviders = dashboard?.providers.filter((p) => p.enabled) ?? [];
+  const dashboardProviders = dashboard?.providers ?? [];
   const statusIntervalLabel = modelStatusIntervalLabel(settings);
   const statusIntervalValue = modelStatusIntervalValue(settings);
-
-  // Auto-trigger a full probe sweep on first mount. Without this the
-  // dashboard's "Available Models N/52" stat only reflects whatever
-  // the periodic scheduler has happened to run since the last
-  // restart — confusingly low on a freshly opened page. Coalescing
-  // is handled server-side (APScheduler max_instances=1), so opening
-  // the same page in 3 tabs doesn't queue 3×N probes.
-  const initialSweepRef = useRef(false);
-  useEffect(() => {
-    if (initialSweepRef.current) return;
-    initialSweepRef.current = true;
-    void api.probeAll().catch(() => {
-      /* non-critical; the periodic sweep will catch up */
-    });
-  }, []);
 
   async function onRefreshAll() {
     if (refreshingAll) return;
@@ -107,15 +100,52 @@ export function DashboardPage() {
     }
   }
 
-  async function onDelete(p: Provider) {
-    if (!confirm(t("common.confirmDeleteProvider", { name: p.name }))) return;
+  async function onDelete(providerId: string, providerName: string) {
+    if (!confirm(t("common.confirmDeleteProvider", { name: providerName }))) return;
     try {
-      await withErrorToast(api.deleteProvider(p.id), t("common.delete"));
-      pushToast("ok", t("toast.deleted"), p.name);
+      await withErrorToast(api.deleteProvider(providerId), t("common.delete"));
+      pushToast("ok", t("toast.deleted"), providerName);
       await refresh();
     } catch {
       /* toast already shown */
     }
+  }
+
+  async function toggleMonitoring(p: DashboardProvider) {
+    const nextEnabled = !p.enabled;
+    setTogglingProviders((prev) => ({ ...prev, [p.provider_id]: true }));
+    try {
+      await withErrorToast(
+        api.patchProvider(p.provider_id, { enabled: nextEnabled }),
+        nextEnabled ? t("providers.card.monitorTitleOff") : t("providers.card.monitorTitleOn"),
+      );
+      pushToast("ok", nextEnabled ? t("toast.monitoringOn") : t("toast.monitoringOff"), p.name);
+      await refresh();
+    } catch {
+      /* toast already shown */
+    } finally {
+      setTogglingProviders((prev) => {
+        const next = { ...prev };
+        delete next[p.provider_id];
+        return next;
+      });
+    }
+  }
+
+  function toProvider(p: DashboardProvider): Provider {
+    return {
+      id: p.provider_id,
+      name: p.name,
+      kind: p.kind,
+      base_url: p.base_url,
+      enabled: p.enabled,
+      interval_seconds: p.interval_seconds,
+      timeout_seconds: p.timeout_seconds,
+      proxy: p.proxy,
+      headers_json: p.headers_json,
+      created_at: "",
+      updated_at: "",
+    };
   }
 
   if (loading && !dashboard) {
@@ -177,7 +207,6 @@ export function DashboardPage() {
             sub={t("dashboard.stat.providers.sub")}
             icon={<IconServer />}
             accentColor="var(--primary)"
-            to="/providers"
           />
           <StatCard
             label={t("dashboard.stat.availableModels.label")}
@@ -198,7 +227,6 @@ export function DashboardPage() {
             }
             icon={<IconCheck />}
             accentColor="var(--ok)"
-            to="/providers"
           />
           <StatCard
             label={t("dashboard.stat.favoriteModels.label")}
@@ -215,7 +243,7 @@ export function DashboardPage() {
         </div>
       )}
 
-      {dashboard && activeDashboardProviders.length > 0 && (
+      {dashboard && dashboardProviders.length > 0 && (
         <div className="section">
           <div className="section-header">
             <div className="section-title">
@@ -227,15 +255,17 @@ export function DashboardPage() {
             </span>
           </div>
           <div className="dashboard-provider-list stagger">
-            {activeDashboardProviders.map((p) => {
-              const provider = providers.find((x) => x.id === p.provider_id);
+            {dashboardProviders.map((p) => {
               const isRunning = !!runningProviders[p.provider_id];
+              const isSyncing = !!syncingProviders[p.provider_id];
+              const isToggling = !!togglingProviders[p.provider_id];
               const status = p.last_status ?? "unknown";
+              const visibleStatus = p.enabled ? status : "unknown";
               return (
                 <article
                   key={p.provider_id}
-                  className="provider-card dashboard-provider-card"
-                  style={{ ["--status-color" as string]: statusColor(p.last_status) }}
+                  className={`provider-card dashboard-provider-card${p.enabled ? "" : " dashboard-provider-paused"}`}
+                  style={{ ["--status-color" as string]: statusColor(p.enabled ? p.last_status : null) }}
                   onClick={() => nav(`/providers/${p.provider_id}`)}
                   onKeyDown={(e) => {
                     if (e.key === "Enter" || e.key === " ") {
@@ -245,142 +275,185 @@ export function DashboardPage() {
                   }}
                   role="button"
                   tabIndex={0}
-                  aria-label={`${p.name}, ${t("status." + status)}`}
+                  aria-label={`${p.name}, ${p.enabled ? t("status." + status) : t("dashboard.card.monitoringOff")}`}
                 >
                   <div className="head">
                     <div>
                       <div className="name">
                         <span
-                          className={`status-dot ${status}`}
-                          title={`${t("status." + status)}`}
-                          aria-label={`${t("status." + status)}`}
+                          className={`status-dot ${visibleStatus}`}
+                          title={p.enabled ? `${t("status." + status)}` : t("dashboard.card.monitoringOff")}
+                          aria-label={p.enabled ? `${t("status." + status)}` : t("dashboard.card.monitoringOff")}
                         />
                         {p.name}
-                        <span className={`pill ${status}`}>{t("status." + status)}</span>
+                        <span className={`pill ${visibleStatus}`}>
+                          {p.enabled ? t("status." + status) : t("dashboard.card.monitoringOff")}
+                        </span>
                       </div>
                       <div className="meta">
                         <span className="kind-badge">
                           <KindIcon kind={p.kind} /> {p.kind}
                         </span>
                         <span style={{ marginLeft: 8 }}>
-                          {p.model_count} models · {formatRelative(p.last_checked_at)}
+                          {p.model_count} models · {t("dashboard.card.listEvery", { n: p.interval_seconds })}
                         </span>
+                      </div>
+                      <div className="dashboard-endpoint-line" title={p.base_url}>
+                        {p.base_url}
+                        {p.proxy && <span>{t("providers.dialog.labelProxy")}: {p.proxy}</span>}
+                        <span>{t("providers.dialog.labelTimeout")}: {p.timeout_seconds}s</span>
                       </div>
                       <div className="dashboard-monitoring-line">
-                        <span className="pill ok">{t("dashboard.card.monitoringOn")}</span>
-                        <span className={`pill ${p.list_models_status ?? "unknown"}`}>
-                          {t("dashboard.card.modelList")} {p.list_models_status ?? t("common.unknown")}
-                        </span>
-                        <span className="muted">{statusIntervalLabel}</span>
-                        {isRunning && <span className="pill info">{t("dashboard.card.probeQueued")}</span>}
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="dashboard-provider-body">
-                    <div className="dashboard-provider-summary">
-                      <div className="metrics">
-                        <div className="metric">
-                          <div className="label">{t("dashboard.card.availability24h")}</div>
-                          <div
-                            className="value"
-                            style={{
-                              color:
-                                p.availability_24h == null
-                                  ? "var(--muted)"
-                                  : p.availability_24h >= 99
-                                    ? "var(--ok)"
-                                    : p.availability_24h >= 90
-                                      ? "var(--warn)"
-                                      : "var(--fail)",
-                            }}
-                          >
-                            {formatPercent(p.availability_24h)}
-                          </div>
-                        </div>
-                        <div className="metric">
-                          <div className="label">{t("dashboard.card.p95Latency")}</div>
-                          <div className="value">{formatMs(p.p95_latency_ms_24h)}</div>
-                        </div>
-                        <div className="metric">
-                          <div className="label">{t("dashboard.card.p95Ttfb")}</div>
-                          <div className="value">{formatMs(p.p95_ttfb_ms_24h)}</div>
-                        </div>
-                        <div className="metric">
-                          <div className="label">{t("dashboard.card.samplesFailures")}</div>
-                          <div className="value">{p.samples_24h} / {p.failures_24h}</div>
-                        </div>
-                        <div className="metric dashboard-wide-metric">
-                          <div className="label">{t("dashboard.card.modelList")}</div>
-                          <div className="value">
-                            {p.list_models_status ? (
-                              <>
-                                {t("status." + (p.list_models_status === "ok" ? "online" : p.list_models_status === "fail" ? "offline" : "unknown"))}
-                                <span className="metric-subvalue">
-                                  {formatMs(p.list_models_latency_ms)} · {formatRelative(p.list_models_checked_at)}
-                                </span>
-                              </>
-                            ) : (
-                              "—"
-                            )}
-                          </div>
-                        </div>
-                        <div className="metric dashboard-wide-metric">
-                          <div className="label">{t("dashboard.card.modelList")}</div>
-                          <div className="value">
-                            {p.model_count > 0
-                              ? `${p.available_models_online} / ${p.model_count}`
-                              : "—"}
-                          </div>
-                        </div>
-                        <div className="metric dashboard-wide-metric">
-                          <div className="label">{t("dashboard.section.favoriteModels")}</div>
-                          <div className="value">
-                            {p.favorite_models_total > 0
-                              ? `${p.favorite_models_online} / ${p.favorite_models_total}`
-                              : "—"}
-                          </div>
-                        </div>
-                        <div className="metric dashboard-wide-metric">
-                          <div className="label">{t("dashboard.card.availability24h").replace("24h Availability", "Errors 24h")}</div>
-                          <div className="value metric-compact-value">
-                            {errorSummary(p.error_counts_24h)}
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="dashboard-model-panels">
-                      <div className="dashboard-model-panel">
-                        <div className="dashboard-favorites-head">
-                          <span>
-                            <IconStarOutline filled />
-                            {t("dashboard.section.favoriteModels")}
+                        <label
+                          className={`monitoring-switch ${isToggling ? "busy" : ""}`}
+                          onClick={(e) => e.stopPropagation()}
+                          onKeyDown={(e) => e.stopPropagation()}
+                          title={
+                            p.enabled
+                              ? t("providers.card.monitorTitleOn")
+                              : t("providers.card.monitorTitleOff")
+                          }
+                        >
+                          <input
+                            type="checkbox"
+                            checked={p.enabled}
+                            disabled={isToggling}
+                            onChange={() => void toggleMonitoring(p)}
+                            aria-label={
+                              p.enabled
+                                ? t("providers.card.monitorAriaOn", { name: p.name })
+                                : t("providers.card.monitorAriaOff", { name: p.name })
+                            }
+                          />
+                          <span className="monitoring-switch-track" />
+                          <span className="monitoring-switch-text">
+                            {isToggling
+                              ? t("dashboard.card.monitoringUpdating")
+                              : p.enabled
+                                ? t("dashboard.card.monitoringOn")
+                                : t("dashboard.card.monitoringOff")}
                           </span>
-                          <strong>
-                            {p.favorite_models_online}/{p.favorite_models_total}
-                          </strong>
-                        </div>
-                        {(p.favorite_models ?? []).length > 0 ? (
-                          <div className="favorite-model-list">
-                            {(p.favorite_models ?? []).map((model) => (
-                              <FavoriteModelStatus
-                                key={model.id}
-                                model={model}
-                                providerId={p.provider_id}
-                                providerName={p.name}
-                                onRefresh={refresh}
-                              />
-                            ))}
-                          </div>
-                        ) : (
-                          <div className="favorite-model-empty">
-                            {t("dashboard.section.noFavorites")}
-                          </div>
+                        </label>
+                        {p.enabled && (
+                          <>
+                            <span className={`pill ${p.list_models_status ?? "unknown"}`}>
+                              {t("dashboard.card.modelList")} {p.list_models_status ?? t("common.unknown")}
+                            </span>
+                            <span className="muted">{statusIntervalLabel}</span>
+                          </>
                         )}
+                        {isRunning && <span className="pill info">{t("dashboard.card.probeQueued")}</span>}
+                        {isSyncing && <span className="pill info">{t("dashboard.card.syncingList")}</span>}
                       </div>
                     </div>
                   </div>
+
+                  {p.enabled && (
+                    <div className="dashboard-provider-body">
+                      <div className="dashboard-provider-summary">
+                        <div className="metrics">
+                          <div className="metric">
+                            <div className="label">{t("dashboard.card.availability24h")}</div>
+                            <div
+                              className="value"
+                              style={{
+                                color:
+                                  p.availability_24h == null
+                                    ? "var(--muted)"
+                                    : p.availability_24h >= 99
+                                      ? "var(--ok)"
+                                      : p.availability_24h >= 90
+                                        ? "var(--warn)"
+                                        : "var(--fail)",
+                              }}
+                            >
+                              {formatPercent(p.availability_24h)}
+                            </div>
+                          </div>
+                          <div className="metric">
+                            <div className="label">{t("dashboard.card.p95Latency")}</div>
+                            <div className="value">{formatMs(p.p95_latency_ms_24h)}</div>
+                          </div>
+                          <div className="metric">
+                            <div className="label">{t("dashboard.card.p95Ttfb")}</div>
+                            <div className="value">{formatMs(p.p95_ttfb_ms_24h)}</div>
+                          </div>
+                          <div className="metric">
+                            <div className="label">{t("dashboard.card.samplesFailures")}</div>
+                            <div className="value">{p.samples_24h} / {p.failures_24h}</div>
+                          </div>
+                          <div className="metric dashboard-wide-metric">
+                            <div className="label">{t("dashboard.card.modelList")}</div>
+                            <div className="value">
+                              {p.list_models_status ? (
+                                <>
+                                  {t("status." + (p.list_models_status === "ok" ? "online" : p.list_models_status === "fail" ? "offline" : "unknown"))}
+                                  <span className="metric-subvalue">
+                                    {formatMs(p.list_models_latency_ms)} · {formatRelative(p.list_models_checked_at)}
+                                  </span>
+                                </>
+                              ) : (
+                                "—"
+                              )}
+                            </div>
+                          </div>
+                          <div className="metric dashboard-wide-metric">
+                            <div className="label">{t("dashboard.stat.availableModels.label")}</div>
+                            <div className="value">
+                              {p.model_count > 0
+                                ? `${p.available_models_online} / ${p.model_count}`
+                                : "—"}
+                            </div>
+                          </div>
+                          <div className="metric dashboard-wide-metric">
+                            <div className="label">{t("dashboard.section.favoriteModels")}</div>
+                            <div className="value">
+                              {p.favorite_models_total > 0
+                                ? `${p.favorite_models_online} / ${p.favorite_models_total}`
+                                : "—"}
+                            </div>
+                          </div>
+                          <div className="metric dashboard-wide-metric">
+                            <div className="label">{t("dashboard.card.errors24h")}</div>
+                            <div className="value metric-compact-value">
+                              {errorSummary(p.error_counts_24h)}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="dashboard-model-panels">
+                        <div className="dashboard-model-panel">
+                          <div className="dashboard-favorites-head">
+                            <span>
+                              <IconStarOutline filled />
+                              {t("dashboard.section.favoriteModels")}
+                            </span>
+                            <strong>
+                              {p.favorite_models_online}/{p.favorite_models_total}
+                            </strong>
+                          </div>
+                          {(p.favorite_models ?? []).length > 0 ? (
+                            <div className="favorite-model-list">
+                              {(p.favorite_models ?? []).map((model) => (
+                                <FavoriteModelStatus
+                                  key={model.id}
+                                  model={model}
+                                  providerId={p.provider_id}
+                                  providerName={p.name}
+                                  onRefresh={refresh}
+                                />
+                              ))}
+                            </div>
+                          ) : (
+                            <div className="favorite-model-empty">
+                              {t("dashboard.section.noFavorites")}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  )}
 
                   <div
                     className="actions"
@@ -388,64 +461,79 @@ export function DashboardPage() {
                     onKeyDown={(e) => e.stopPropagation()}
                   >
                     <button
-                      className="secondary sm"
-                      disabled={isRunning}
-                      onClick={async () => {
-                        setRunningProviders((prev) => ({ ...prev, [p.provider_id]: true }));
-                        try {
-                          await api.runNow(p.provider_id);
-                          pushToast("info", t("toast.probeQueued"), p.name);
-                          window.setTimeout(() => {
-                            void refresh().finally(() => {
-                              setRunningProviders((prev) => {
-                                const next = { ...prev };
-                                delete next[p.provider_id];
-                                return next;
-                              });
-                            });
-                          }, 8_000);
-                        } catch (e) {
-                          setRunningProviders((prev) => {
-                            const next = { ...prev };
-                            delete next[p.provider_id];
-                            return next;
-                          });
-                          pushToast("fail", t("toast.triggerFailed"), e instanceof Error ? e.message : String(e));
-                        }
-                      }}
-                      title={t("dashboard.card.probeStatusTitle")}
-                      aria-label={t("dashboard.card.probeStatus")}
+                      className="ghost sm"
+                      onClick={() => setEditingProvider(toProvider(p))}
+                      aria-label={`${t("providers.card.edit")} ${p.name}`}
+                      title={t("providers.card.edit")}
                     >
-                      {isRunning ? <span className="spinner" /> : <IconPlay />}
-                      {isRunning ? t("common.saving") : t("dashboard.card.probeStatus")}
+                      <IconEdit />
                     </button>
-                    <button
-                      className="secondary sm"
-                      onClick={async () => {
-                        try {
-                          await api.syncModels(p.provider_id);
-                          pushToast("ok", t("toast.modelListUpdated"), p.name);
-                          await refresh();
-                        } catch (e) {
-                          pushToast("fail", t("toast.updateFailed"), e instanceof Error ? e.message : String(e));
-                        }
-                      }}
-                      title={t("dashboard.card.syncModelsTitle")}
-                      aria-label={t("dashboard.card.syncModels")}
-                    >
-                      <IconRefresh />
-                      {t("dashboard.card.syncModels")}
-                    </button>
-                    {provider && (
+                    {p.enabled && (
                       <button
-                        className="ghost sm"
-                        onClick={() => onDelete(provider)}
-                        aria-label={t("common.delete")}
-                        title={t("common.delete")}
+                        className="secondary sm"
+                        disabled={isRunning}
+                        onClick={async () => {
+                          setRunningProviders((prev) => ({ ...prev, [p.provider_id]: true }));
+                          try {
+                            await withErrorToast(api.runNow(p.provider_id), t("dashboard.card.probeStatus"));
+                            pushToast("info", t("toast.probeQueued"), p.name);
+                            window.setTimeout(() => {
+                              void refresh().finally(() => {
+                                setRunningProviders((prev) => {
+                                  const next = { ...prev };
+                                  delete next[p.provider_id];
+                                  return next;
+                                });
+                              });
+                            }, 8_000);
+                          } catch {
+                            setRunningProviders((prev) => {
+                              const next = { ...prev };
+                              delete next[p.provider_id];
+                              return next;
+                            });
+                          }
+                        }}
+                        title={t("dashboard.card.probeStatusTitle")}
+                        aria-label={t("dashboard.card.probeStatus")}
                       >
-                        <IconDelete />
+                        {isRunning ? <span className="spinner" /> : <IconPlay />}
+                        {isRunning ? t("common.saving") : t("dashboard.card.probeStatus")}
                       </button>
                     )}
+                    {p.enabled && (
+                      <button
+                        className="secondary sm"
+                        disabled={isSyncing}
+                        onClick={async () => {
+                          setSyncingProviders((prev) => ({ ...prev, [p.provider_id]: true }));
+                          try {
+                            await withErrorToast(api.syncModels(p.provider_id), t("dashboard.card.syncModels"));
+                            pushToast("ok", t("toast.modelListUpdated"), p.name);
+                            await refresh();
+                          } finally {
+                            setSyncingProviders((prev) => {
+                              const next = { ...prev };
+                              delete next[p.provider_id];
+                              return next;
+                            });
+                          }
+                        }}
+                        title={t("dashboard.card.syncModelsTitle")}
+                        aria-label={t("dashboard.card.syncModels")}
+                      >
+                        {isSyncing ? <span className="spinner" /> : <IconRefresh />}
+                        {isSyncing ? t("dashboard.card.syncingList") : t("dashboard.card.syncModels")}
+                      </button>
+                    )}
+                    <button
+                      className="ghost sm"
+                      onClick={() => onDelete(p.provider_id, p.name)}
+                      aria-label={t("common.delete")}
+                      title={t("common.delete")}
+                    >
+                      <IconDelete />
+                    </button>
                   </div>
                 </article>
               );
@@ -485,27 +573,16 @@ export function DashboardPage() {
           </div>
         </div>
       )}
-      {dashboard && dashboard.providers.length > 0 && activeDashboardProviders.length === 0 && !loading && (
-        <div className="card fade-up">
-          <div className="empty-state">
-            <div className="empty-state-icon">
-              <IconServer />
-            </div>
-            <h3>{t("dashboard.section.pausedTitle")}</h3>
-            <p>{t("dashboard.section.pausedDesc")}</p>
-            <button
-              onClick={() => nav("/providers")}
-              style={{ marginTop: 12 }}
-            >
-              <IconServer />
-              {t("dashboard.section.manageProviders")}
-            </button>
-          </div>
-        </div>
-      )}
       {showAddProvider && (
         <ProviderDialog
           onClose={() => setShowAddProvider(false)}
+          onSaved={refresh}
+        />
+      )}
+      {editingProvider && (
+        <ProviderDialog
+          provider={editingProvider}
+          onClose={() => setEditingProvider(null)}
           onSaved={refresh}
         />
       )}
@@ -548,10 +625,11 @@ function FavoriteModelStatus({
         </div>
         <div className="favorite-model-meta">
           <span className="favorite-model-type">{model.type}</span>
-          <span>{formatRelative(model.last_checked_at)}</span>
-          <span>confirmed {formatRelative(model.status_confirmed_at)}</span>
-          {model.last_success_at && <span>last ok {formatRelative(model.last_success_at)}</span>}
-          <span>{model.samples_24h} samples</span>
+          <span>{t("dashboard.favoriteMeta.checked", { time: formatRelative(model.last_checked_at) })}</span>
+          {model.status !== "online" && model.last_success_at && (
+            <span>{t("dashboard.favoriteMeta.lastOk", { time: formatRelative(model.last_success_at) })}</span>
+          )}
+          <span>{t("dashboard.favoriteMeta.samples", { count: model.samples_24h })}</span>
           {(model.status_reason || model.error_code) && (
             <span className="favorite-model-error">{model.status_reason ?? model.error_code}</span>
           )}

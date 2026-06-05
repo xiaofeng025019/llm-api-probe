@@ -26,6 +26,7 @@ export interface Provider {
   timeout_seconds: number;
   proxy: string | null;
   headers_json: string | null;
+  api_key?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -74,7 +75,12 @@ export interface DashboardProvider {
   provider_id: string;
   name: string;
   kind: ProviderKind;
+  base_url: string;
   enabled: boolean;
+  interval_seconds: number;
+  timeout_seconds: number;
+  proxy: string | null;
+  headers_json: string | null;
   model_count: number;
   last_checked_at: string | null;
   last_status: "ok" | "degraded" | "fail" | null;
@@ -206,7 +212,7 @@ export const api = {
   syncModels: (id: string) =>
     request<ModelOut[]>(`/api/v1/providers/${id}/sync-models`, { method: "POST" }),
   runNow: (id: string) =>
-    request<{ scheduled: boolean }>(`/api/v1/providers/${id}/run`, { method: "POST" }),
+    request<{ scheduled: number; skipped?: number }>(`/api/v1/providers/${id}/run`, { method: "POST" }),
   patchModel: (id: string, body: { is_favorite?: boolean; enabled?: boolean }) =>
     request<ModelOut>(`/api/v1/models/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
   createProvider: (body: {
@@ -224,6 +230,8 @@ export const api = {
   deleteProvider: (id: string) =>
     request<{ deleted: string }>(`/api/v1/providers/${id}`, { method: "DELETE" }),
   models: (id: string) => request<ModelOut[]>(`/api/v1/providers/${id}/models`),
+  addModel: (providerId: string, body: { model_id: string; display_name?: string | null; type?: ModelType }) =>
+    request<ModelOut>(`/api/v1/providers/${providerId}/models`, { method: "POST", body: JSON.stringify(body) }),
   results: (params: { provider_id?: string; model_id?: string; hours?: number; limit?: number } = {}) => {
     const q = new URLSearchParams();
     if (params.provider_id != null) q.set("provider_id", String(params.provider_id));
@@ -249,9 +257,12 @@ export const api = {
     const q = new URLSearchParams();
     if (providerId != null) q.set("provider_id", String(providerId));
     if (modelId != null) q.set("model_id", String(modelId));
-    return request<{ scheduled: boolean }>(`/api/v1/probe/run?${q.toString()}`, { method: "POST" });
+    return request<{ scheduled: number | boolean; skipped?: number }>(
+      `/api/v1/probe/run?${q.toString()}`,
+      { method: "POST" },
+    );
   },
-  /** Schedule a fresh probe for every enabled provider + model.
+  /** Schedule a fresh status check for every enabled provider + model.
    *  Returns immediately; results land asynchronously. */
   probeAll: () =>
     request<{ scheduled: number; skipped: number }>("/api/v1/probe/run-all", { method: "POST" }),

@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sse_starlette.sse import EventSourceResponse
 
-from app.core.scheduler import sync_all_jobs, trigger_all_models_now, trigger_now
+from app.core.scheduler import sync_all_jobs, trigger_all_models_now, trigger_now, trigger_provider_now
 from app.core.sse import get_sse
 from app.db.session import get_session
 from app.schemas.api import (
@@ -280,6 +280,15 @@ async def probe_run(
                 status_code=400,
                 detail=f"model {model_id} does not belong to provider {provider_id}",
             )
+    if model_id is None:
+        scheduled_count, skipped = await trigger_provider_now(provider_id)
+        if scheduled_count == 0 and skipped > 0:
+            raise HTTPException(
+                status_code=409,
+                detail="provider is disabled; enable it before checking model status",
+            )
+        return ApiResponse(data={"scheduled": scheduled_count, "skipped": skipped})
+
     scheduled = await trigger_now(provider_id, model_id)
     if not scheduled:
         # The target job (or its model/provider) is disabled. Surface a 409 so
@@ -294,10 +303,10 @@ async def probe_run(
 
 @router.post("/probe/run-all", response_model=ApiResponse)
 async def probe_run_all(session: AsyncSession = Depends(get_session)) -> ApiResponse:
-    """Schedule a fresh probe for every enabled provider + model.
+    """Schedule a fresh model-status check for every enabled provider + model.
 
-    Used by the dashboard's page-mount auto-refresh and the
-    "Refresh all" button. Returns the count of probes that were
+    Used by the dashboard's "Check all model status" button. Returns
+    the count of model checks that were
     enqueued vs. skipped (e.g. provider disabled).
 
     Probes run asynchronously in the background; the API call
@@ -313,15 +322,13 @@ async def probe_run_all(session: AsyncSession = Depends(get_session)) -> ApiResp
 
 @router.get("/errors", response_model=ApiResponse)
 async def list_errors(
-    limit: int = Query(default=200, ge=1, le=1000),
+    limit: int = Query(default=100, ge=1, le=100),
     session: AsyncSession = Depends(get_session),
 ) -> ApiResponse:
     """Return the recent failure log for the error history page.
 
-    Pinned errors float to the top regardless of age so the user
-    always sees what they've asked to keep. Non-pinned errors are
-    ordered by recency; they'll be deleted by the daily retention
-    cleanup after `retention_days` (default 30)."""
+    Pinned errors float to the top inside the short history window.
+    Error history is capped at 100 failed rows and 15 minutes."""
     rows = await results_svc.list_recent_errors(session, limit=limit)
     return ApiResponse(data=[ProbeResultOut.model_validate(r) for r in rows])
 

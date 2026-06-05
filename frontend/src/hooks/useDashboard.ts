@@ -12,7 +12,12 @@ export interface DashboardState {
   refresh: () => Promise<void>;
 }
 
-export function useDashboard(autoRefreshOnSse = true): DashboardState {
+export function useDashboard(
+  autoRefreshOnSse = true,
+  options: { loadModels?: boolean; loadProviders?: boolean } = {},
+): DashboardState {
+  const loadModels = options.loadModels ?? true;
+  const loadProviders = options.loadProviders ?? true;
   const [dashboard, setDashboard] = useState<Dashboard | null>(null);
   const [providers, setProviders] = useState<Provider[]>([]);
   const [modelsByProvider, setModelsByProvider] = useState<Record<string, ModelOut[]>>({});
@@ -38,7 +43,11 @@ export function useDashboard(autoRefreshOnSse = true): DashboardState {
   const refreshFast = useCallback(async () => {
     setError(null);
     try {
-      const [d, ps, ss] = await Promise.all([api.dashboard(), api.providers(), api.settings()]);
+      const [d, ps, ss] = await Promise.all([
+        api.dashboard(),
+        loadProviders ? api.providers() : Promise.resolve([]),
+        api.settings(),
+      ]);
       setDashboard(d);
       setProviders(ps);
       setSettings(ss);
@@ -47,9 +56,10 @@ export function useDashboard(autoRefreshOnSse = true): DashboardState {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [loadProviders]);
 
   const refreshSlow = useCallback(async () => {
+    if (!loadModels) return;
     if (inFlightSlowRef.current) return;
     inFlightSlowRef.current = true;
     try {
@@ -65,7 +75,7 @@ export function useDashboard(autoRefreshOnSse = true): DashboardState {
     } finally {
       inFlightSlowRef.current = false;
     }
-  }, []);
+  }, [loadModels]);
 
   // Public refresh: both tiers. Used by user-initiated actions
   // (delete, patch, etc.) where consistency matters.
@@ -76,9 +86,9 @@ export function useDashboard(autoRefreshOnSse = true): DashboardState {
 
   useEffect(() => {
     void refreshFast();
-    void refreshSlow();
+    if (loadModels) void refreshSlow();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [loadModels]);
 
   useEffect(() => {
     const t = setInterval(refreshFast, 30_000);
@@ -86,9 +96,10 @@ export function useDashboard(autoRefreshOnSse = true): DashboardState {
   }, [refreshFast]);
 
   useEffect(() => {
+    if (!loadModels) return;
     const t = setInterval(refreshSlow, 5 * 60_000);
     return () => clearInterval(t);
-  }, [refreshSlow]);
+  }, [loadModels, refreshSlow]);
 
   // Debounce SSE-driven refresh. The probe scheduler can fire
   // `probe.completed` 50+ times in a few seconds (e.g. right after

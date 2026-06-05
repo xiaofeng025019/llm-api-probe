@@ -938,6 +938,7 @@ async def test_provider_health_status_never_probed_yields_none_not_degraded(sess
     )
     # list_models probe missing here, so we get None (not degraded).
     # The point: no signal = no status, not "degraded".
+    assert status is None
 
     # Now repeat with a successful list_models probe — still must not be degraded
     class _FakeResult:
@@ -1060,6 +1061,69 @@ async def test_list_recent_errors_pinned_first(session) -> None:
     # b, c are not pinned, ordered by recency (c first since it was last)
     assert uuids[1] == c.uuid_id
     assert uuids[2] == b.uuid_id
+
+
+@pytest.mark.asyncio
+async def test_error_history_filters_and_cleans_older_than_15_minutes(session) -> None:
+    p = await providers_svc.create_provider(
+        session,
+        ProviderCreate(
+            name="p1",
+            kind=ProviderKind.openai,
+            base_url="https://api.openai.com",
+            api_key="k",
+        ),
+    )
+    old = await results_svc.record_outcome(
+        session, p, None, ProbeTarget.list_models,
+        ProbeOutcome(success=False, http_status=500, error_code=ErrorCode.server),
+    )
+    fresh = await results_svc.record_outcome(
+        session, p, None, ProbeTarget.list_models,
+        ProbeOutcome(success=False, http_status=502, error_code=ErrorCode.server),
+    )
+
+    await session.execute(
+        ProbeResult.__table__.update()
+        .where(ProbeResult.uuid_id == old.uuid_id)
+        .values(checked_at=datetime.now(UTC).replace(tzinfo=None) - timedelta(minutes=16))
+    )
+    await session.commit()
+
+    rows = await results_svc.list_recent_errors(session, limit=100)
+    assert [r.uuid_id for r in rows] == [fresh.uuid_id]
+
+    removed = await results_svc.cleanup_error_history(session)
+    assert removed == 1
+    remaining = (await session.execute(ProbeResult.__table__.select())).all()
+    assert [r.uuid_id for r in remaining] == [fresh.uuid_id]
+
+
+@pytest.mark.asyncio
+async def test_error_history_keeps_at_most_100_failures(session) -> None:
+    p = await providers_svc.create_provider(
+        session,
+        ProviderCreate(
+            name="p1",
+            kind=ProviderKind.openai,
+            base_url="https://api.openai.com",
+            api_key="k",
+        ),
+    )
+
+    rows = []
+    for i in range(101):
+        rows.append(
+            await results_svc.record_outcome(
+                session, p, None, ProbeTarget.list_models,
+                ProbeOutcome(success=False, http_status=500 + (i % 3), error_code=ErrorCode.server),
+            )
+        )
+
+    errors = await results_svc.list_recent_errors(session, limit=200)
+    assert len(errors) == 100
+    assert rows[0].uuid_id not in {r.uuid_id for r in errors}
+    assert rows[-1].uuid_id == errors[0].uuid_id
 
 
 @pytest.mark.asyncio

@@ -4,7 +4,7 @@ import { api, Provider, ProviderKind } from "../api/types";
 import { useDashboard } from "../hooks/useDashboard";
 import { formatMs, formatRelative, statusColor } from "../lib/format";
 import { modelStatusIntervalLabel } from "../lib/settings";
-import { Icon } from "../components/Icons";
+import { Icon, IconEye, IconEyeOff } from "../components/Icons";
 import { withErrorToast } from "../lib/action";
 import { pushToast } from "../components/Toast";
 import { useT } from "../hooks/useT";
@@ -67,7 +67,7 @@ export function ProvidersPage() {
     try {
       await withErrorToast(
         api.patchProvider(p.id, { enabled: nextEnabled }),
-        t("dashboard.card.probeStatus").replace("Probe status", "Toggle monitoring"),
+        nextEnabled ? t("providers.card.monitorTitleOff") : t("providers.card.monitorTitleOn"),
       );
       pushToast(
         "ok",
@@ -468,7 +468,8 @@ export function ProviderDialog({
   const [name, setName] = useState(provider?.name ?? "");
   const [kind, setKind] = useState<ProviderKind>(provider?.kind ?? "openai");
   const [baseUrl, setBaseUrl] = useState(provider?.base_url ?? "https://api.openai.com");
-  const [apiKey, setApiKey] = useState("");
+  const [apiKey, setApiKey] = useState(provider?.api_key ?? "");
+  const [showKey, setShowKey] = useState(false);
   const [proxy, setProxy] = useState(provider?.proxy ?? "");
   const [intervalSec, setIntervalSec] = useState(provider?.interval_seconds ?? 300);
   const [timeoutSec, setTimeoutSec] = useState(provider?.timeout_seconds ?? 30);
@@ -497,6 +498,7 @@ export function ProviderDialog({
     try {
       if (isEdit && provider) {
         const body: Record<string, unknown> = {
+          name,
           base_url: baseUrl,
           proxy: proxy || null,
           interval_seconds: intervalSec,
@@ -560,7 +562,6 @@ export function ProviderDialog({
             <label>{t("providers.dialog.labelName")}</label>
             <input
               value={name}
-              disabled={isEdit}
               onChange={(e) => setName(e.target.value)}
               placeholder={t("providers.dialog.namePlaceholder")}
             />
@@ -588,12 +589,23 @@ export function ProviderDialog({
                 ? t("providers.dialog.apiKeyEditHint")
                 : t("providers.dialog.labelApiKey")}
             </label>
-            <input
-              type="password"
-              value={apiKey}
-              onChange={(e) => setApiKey(e.target.value)}
-              placeholder="sk-…"
-            />
+            <div className="input-with-icon">
+              <input
+                type={showKey ? "text" : "password"}
+                value={apiKey}
+                onChange={(e) => setApiKey(e.target.value)}
+                placeholder="sk-…"
+              />
+              <button
+                type="button"
+                className="input-icon-btn"
+                title={showKey ? t("common.hide") : t("common.show")}
+                onClick={() => setShowKey((s) => !s)}
+                aria-label={showKey ? t("common.hide") : t("common.show")}
+              >
+                {showKey ? <IconEyeOff size={14} /> : <IconEye size={14} />}
+              </button>
+            </div>
           </div>
           <div className="form-row full">
             <label>{t("providers.dialog.labelProxy")}</label>

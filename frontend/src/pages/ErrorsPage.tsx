@@ -7,7 +7,7 @@ import { pushToast } from "../components/Toast";
 import { withErrorToast } from "../lib/action";
 import { IconAlertTriangle, IconPin, IconPinFilled, IconRefresh } from "../components/Icons";
 
-const ERROR_LIMIT = 200;
+const ERROR_LIMIT = 100;
 
 export function ErrorsPage() {
   const t = useT();
@@ -147,7 +147,9 @@ export function ErrorsPage() {
               {e.error_message && (
                 <details className="error-card-msg">
                   <summary>
-                    <span className="error-msg-summary-text">{summarize(e.error_message)}</span>
+                    <span className="error-msg-summary-text">
+                      {summarize(e.error_message)}
+                    </span>
                   </summary>
                   <pre className="error-msg-full">{e.error_message}</pre>
                 </details>
@@ -166,16 +168,10 @@ export function ErrorsPage() {
   );
 }
 
-/** Short, single-line summary of an error_message. Many error
- *  payloads are JSON blobs from upstream APIs; we surface the first
- *  key:value pair as a useful hint without flooding the row. */
 function summarize(msg: string): string {
   const trimmed = msg.trim();
-  if (trimmed.length <= 120) return trimmed;
-  // Try to find a human-readable first line
   const firstLine = trimmed.split(/[\r\n]+/, 1)[0];
-  if (firstLine.length <= 200) return firstLine;
-  return firstLine.slice(0, 200) + "…";
+  return firstLine.length > 200 ? `${firstLine.slice(0, 200)}…` : firstLine;
 }
 
 // Silence unused import warning — ProbeResult is referenced for

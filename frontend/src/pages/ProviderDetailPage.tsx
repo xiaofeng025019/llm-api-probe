@@ -32,6 +32,7 @@ import {
   IconModels,
   IconGlobe,
   IconNetwork,
+  IconPlus,
 } from "../components/Icons";
 import { useT } from "../hooks/useT";
 
@@ -84,6 +85,8 @@ export function ProviderDetailPage() {
   const [window_, setWindow] = useState(WINDOWS[1]);
   const [error, setError] = useState<string | null>(null);
   const [expandedModels, setExpandedModels] = useState<Record<string, boolean>>({});
+  const [newModelId, setNewModelId] = useState("");
+  const [addingModel, setAddingModel] = useState(false);
 
   async function refresh() {
     if (!providerId) return;
@@ -493,6 +496,40 @@ export function ProviderDetailPage() {
             {t("providerDetail.models.title")}
           </div>
           <span className="muted">{t("providerDetail.models.count", { n: models.length })}</span>
+          <span className="grow" />
+          <div className="input-with-actions" style={{ maxWidth: 320 }}>
+            <input
+              value={newModelId}
+              onChange={(e) => setNewModelId(e.target.value)}
+              placeholder={t("providerDetail.models.addPlaceholder")}
+              disabled={addingModel}
+              style={{ fontSize: 13 }}
+            />
+            <button
+              className="btn-ghost sm"
+              disabled={addingModel || !newModelId.trim()}
+              onClick={async () => {
+                const mid = newModelId.trim();
+                if (!mid) return;
+                setAddingModel(true);
+                try {
+                  await withErrorToast(
+                    api.addModel(providerId, { model_id: mid }),
+                    t("providerDetail.models.addAction")
+                  );
+                  setNewModelId("");
+                  await refresh();
+                } catch {
+                  /* toast already shown */
+                } finally {
+                  setAddingModel(false);
+                }
+              }}
+            >
+              {addingModel ? <span className="spinner" /> : <IconPlus size={14} />}
+              {t("providerDetail.models.addAction")}
+            </button>
+          </div>
         </div>
         {models.length === 0 ? (
           <div className="empty-state" style={{ padding: 32 }}>
@@ -594,7 +631,7 @@ export function ProviderDetailPage() {
                         {t("providerDetail.models.card.metricDisabled")}
                       </span>
                     )}
-                    <span className="muted" style={{ marginLeft: "auto", fontSize: 10 }}>
+                    <span className="model-status-age">
                       {m.status_checked_at
                         ? formatRelative(m.status_checked_at)
                         : m.status_confirmed_at
@@ -693,11 +730,11 @@ export function ProviderDetailPage() {
 
       <button
         className="ghost"
-        onClick={() => nav("/providers")}
+        onClick={() => nav("/")}
         style={{ marginTop: 16 }}
       >
         <IconBack />
-        {t("common.back")} {t("nav.providers")}
+        {t("common.back")} {t("nav.dashboard")}
       </button>
     </div>
   );

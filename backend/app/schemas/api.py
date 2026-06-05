@@ -74,6 +74,7 @@ class ProviderOut(BaseModel):
     enabled: bool
     interval_seconds: int
     timeout_seconds: int
+    api_key: str | None
     proxy: str | None
     headers_json: str | None
     created_at: datetime
@@ -166,7 +167,12 @@ class DashboardProvider(BaseModel):
     provider_id: uuid.UUID
     name: str
     kind: ProviderKind
+    base_url: str
     enabled: bool
+    interval_seconds: int
+    timeout_seconds: int
+    proxy: str | None = None
+    headers_json: str | None = None
     model_count: int
     last_checked_at: datetime | None
     last_status: str | None

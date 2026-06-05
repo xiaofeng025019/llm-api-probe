@@ -1,8 +1,7 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
-import { BrowserRouter, NavLink, Route, Routes } from "react-router-dom";
+import { BrowserRouter, Navigate, NavLink, Route, Routes } from "react-router-dom";
 import { DashboardPage } from "./pages/DashboardPage";
-import { ProvidersPage } from "./pages/ProvidersPage";
 import { ProviderDetailPage } from "./pages/ProviderDetailPage";
 import { ModelsPage } from "./pages/ModelsPage";
 import { SettingsPage } from "./pages/SettingsPage";
@@ -15,15 +14,35 @@ import { useT } from "./hooks/useT";
 import "./styles.css";
 
 /** Wires global SSE -> toasts; rendered once at the app root. */
+function shortId(id: string | null | undefined): string {
+  return id ? `${id.slice(0, 8)}…` : "";
+}
+
+function rawProbeError(message: string | null | undefined, code?: string | null): string {
+  const text = (message ?? code ?? "failed").trim();
+  return text.length > 220 ? `${text.slice(0, 217)}...` : text;
+}
+
 function GlobalSse() {
   const t = useT();
   useSse((event, data) => {
     if (event === "job.error" && data && typeof data === "object") {
-      const d = data as { provider_id: string; model_id: string | null; message: string };
+      const d = data as {
+        provider_id: string;
+        provider_name?: string | null;
+        model_id: string | null;
+        model_name?: string | null;
+        model_is_favorite?: boolean | null;
+        error_code?: string | null;
+        message: string;
+      };
+      if (!d.model_id || d.model_is_favorite !== true) return;
+      const provider = d.provider_name || `provider ${shortId(d.provider_id)}`;
+      const model = d.model_name || (d.model_id ? `model ${shortId(d.model_id)}` : "");
       pushToast(
         "fail",
-        `${t("appName")} — provider ${d.provider_id.slice(0, 8)}… failed`,
-        d.message ?? t("errors.action.title"),
+        t("toast.probeFailed"),
+        [provider, model, rawProbeError(d.message, d.error_code)].filter(Boolean).join(" · "),
       );
     }
   });
@@ -49,7 +68,6 @@ function App() {
             <NavLink to="/" end>
               {t("nav.dashboard")}
             </NavLink>
-            <NavLink to="/providers">{t("nav.providers")}</NavLink>
             <NavLink to="/errors">{t("nav.errors")}</NavLink>
             <NavLink to="/settings">{t("nav.settings")}</NavLink>
           </nav>
@@ -60,7 +78,7 @@ function App() {
         <main id="main" tabIndex={-1}>
           <Routes>
             <Route path="/" element={<DashboardPage />} />
-            <Route path="/providers" element={<ProvidersPage />} />
+            <Route path="/providers" element={<Navigate to="/" replace />} />
             <Route path="/providers/:id" element={<ProviderDetailPage />} />
             <Route path="/models" element={<ModelsPage />} />
             <Route path="/errors" element={<ErrorsPage />} />

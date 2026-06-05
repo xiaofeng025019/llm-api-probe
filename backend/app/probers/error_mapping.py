@@ -25,12 +25,12 @@ def map_status_to_error(http_status: int | None) -> ErrorCode | None:
 
 def map_exception_to_error(exc: BaseException) -> tuple[ErrorCode, str]:
     if isinstance(exc, httpx.TimeoutException):
-        return ErrorCode.timeout, f"timeout: {exc!r}"
+        return ErrorCode.timeout, repr(exc)
     if isinstance(exc, (httpx.ConnectError, httpx.RemoteProtocolError)):
-        return ErrorCode.network, f"network: {exc!r}"
+        return ErrorCode.network, repr(exc)
     if isinstance(exc, httpx.HTTPStatusError):
         code = map_status_to_error(exc.response.status_code) or ErrorCode.other
-        return code, f"http {exc.response.status_code}: {exc!r}"
+        return code, repr(exc)
     if isinstance(exc, httpx.HTTPError):
-        return ErrorCode.network, f"http-error: {exc!r}"
-    return ErrorCode.other, f"unexpected: {exc!r}"
+        return ErrorCode.network, repr(exc)
+    return ErrorCode.other, repr(exc)

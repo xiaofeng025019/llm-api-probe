@@ -24,8 +24,10 @@ class SseManager:
             self._subscribers.discard(q)
 
     async def broadcast(self, event: str, data: dict[str, Any]) -> None:
-        payload = f"event: {event}\ndata: {json.dumps(data, default=str)}\n\n"
         async with self._lock:
+            if not self._subscribers:
+                return
+            payload = f"event: {event}\ndata: {json.dumps(data, default=str)}\n\n"
             stale: list[asyncio.Queue[str]] = []
             for q in self._subscribers:
                 try:

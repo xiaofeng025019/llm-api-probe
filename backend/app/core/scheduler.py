@@ -20,17 +20,15 @@ from app.core.config import get_settings
 from app.core.http import get_client
 from app.core.sse import get_sse
 from app.db.models import (
-    ErrorCode,
     JobState,
     Model,
-    ProbeResult,
+    ModelType,
     ProbeTarget,
     Provider,
 )
 from app.db.session import get_session_maker
 from app.db.uuid import uuid_equals
 from app.probers import get_prober
-from app.probers.types import ProbeOutcome
 from app.services import results as results_svc
 from app.services import settings as settings_svc
 from app.services.models import disable_stale, upsert_discovered
@@ -169,60 +167,36 @@ async def _run_probe(
             if target == ProbeTarget.chat_completion:
                 if model is None or not model.enabled:
                     return
+                # Only chat and vision models support the chat completions
+                # endpoint; image/audio/embedding models should not be
+                # probed this way (they return 400 and create noise).
+                if model.type not in (ModelType.chat, ModelType.vision):
+                    return
                 model_id_str: str = model.model_id
             else:
                 model_id_str = None  # type: ignore[assignment]
-
-            # Per-provider rate limit (sliding window). When the
-            # limit is hit, we don't actually call upstream — we
-            # record a synthetic `rate_limited` outcome so the
-            # dashboard can show what happened. This protects against
-            # the bursty "Refresh all" + random sweep + user-triggered
-            # probes from overwhelming upstream APIs that already
-            # rate-limit aggressively.
-            rate_limit = await settings_svc.get_int_setting(
-                session,
-                settings_svc.PROVIDER_RATE_LIMIT_KEY,
-                settings_svc.DEFAULT_PROVIDER_RATE_LIMIT_PER_MINUTE,
-                minimum=1,
-                maximum=100,
-            )
-            allowed, retry_after = _check_provider_rate_limit(provider_uuid, rate_limit)
-            if not allowed:
-                outcome = ProbeOutcome(
-                    success=False,
-                    latency_ms=0,
-                    error_code=ErrorCode.rate_limit,
-                    error_message=(
-                        f"local rate limit {rate_limit}/min exceeded; "
-                        f"retry after {retry_after:.1f}s"
-                    ),
-                )
-                row = await results_svc.record_outcome(
-                    session, provider, model.id if model else None, target, outcome
-                )
-                sse = get_sse()
-                await sse.broadcast(
-                    "probe.completed",
-                    {
-                        "id": row.uuid_id,
-                        "provider_id": str(provider_uuid),
-                        "model_id": str(model_uuid) if model_uuid else None,
-                        "target": target.value,
-                        "success": False,
-                        "http_status": None,
-                        "latency_ms": 0,
-                        "ttfb_ms": None,
-                        "error_code": ErrorCode.rate_limit.value,
-                        "checked_at": row.checked_at.isoformat(),
-                    },
-                )
-                return
 
             # Acquire semaphores
             root = get_root_sem()
             psem = _get_provider_sem(provider_uuid)
             async with root, psem:
+                rate_limit = await settings_svc.get_int_setting(
+                    session,
+                    settings_svc.PROVIDER_RATE_LIMIT_KEY,
+                    settings_svc.DEFAULT_PROVIDER_RATE_LIMIT_PER_MINUTE,
+                    minimum=1,
+                    maximum=100,
+                )
+                allowed, retry_after = _check_provider_rate_limit(provider_uuid, rate_limit)
+                if not allowed:
+                    log.info(
+                        "provider rate limit reached: provider=%s limit=%d/min retry_after=%.1fs",
+                        provider_uuid,
+                        rate_limit,
+                        retry_after,
+                    )
+                    return
+
                 client = get_client()
                 prober = get_prober(provider.kind, client)
                 try:
@@ -269,12 +243,16 @@ async def _run_probe(
                             "checked_at": row.checked_at.isoformat(),
                         },
                     )
-                    if not row.success:
+                    if not row.success and model is not None and model.is_favorite:
                         await sse.broadcast(
                             "job.error",
                             {
                                 "provider_id": str(provider_uuid),
+                                "provider_name": provider.name,
                                 "model_id": str(model_uuid) if model_uuid else None,
+                                "model_name": model.model_id if model else None,
+                                "model_is_favorite": True,
+                                "error_code": row.error_code.value if row.error_code else None,
                                 "message": row.error_message or row.error_code.value
                                 if row.error_code
                                 else "fail",
@@ -334,7 +312,8 @@ async def sync_jobs_for_provider(provider_uuid: uuid.UUID, session_maker=None) -
         # ensure list_models job
         list_id = _make_job_id(provider_uuid, None, ProbeTarget.list_models)
         _upsert_job(sched, list_id, provider_uuid, None, ProbeTarget.list_models, list_interval, enabled)
-        # per-model chat_completion jobs
+        # per-model chat_completion jobs — only for model types that
+        # actually support the /v1/chat/completions endpoint.
         models = list(
             (
                 await session.execute(
@@ -346,14 +325,16 @@ async def sync_jobs_for_provider(provider_uuid: uuid.UUID, session_maker=None) -
             .scalars()
             .all()
         )
-        for m in models:
+        probeable_models = [m for m in models if m.type in (ModelType.chat, ModelType.vision)]
+        for m in probeable_models:
             cid = _make_job_id(provider_uuid, m.uuid_id, ProbeTarget.chat_completion)
             model_interval = favorite_model_interval if m.is_favorite else regular_model_interval
             _upsert_job(
                 sched, cid, provider_uuid, m.uuid_id, ProbeTarget.chat_completion, model_interval, enabled
             )
-        # remove jobs for models that disappeared (deleted or disabled)
-        keep = {_make_job_id(provider_uuid, m.uuid_id, ProbeTarget.chat_completion) for m in models}
+        # remove jobs for models that disappeared (deleted, disabled, or
+        # changed to a non-probeable type like image/audio)
+        keep = {_make_job_id(provider_uuid, m.uuid_id, ProbeTarget.chat_completion) for m in probeable_models}
         keep.add(list_id)
         for job in sched.get_jobs():
             if job.id.startswith(f"p{provider_uuid}:") and job.id not in keep:
@@ -458,18 +439,55 @@ async def trigger_now(provider_uuid: uuid.UUID, model_uuid: uuid.UUID | None, se
         return True
 
 
+async def trigger_provider_now(provider_uuid: uuid.UUID, session_maker=None) -> tuple[int, int]:
+    """Schedule status probes for one enabled provider's probeable models.
+
+    This is intentionally separate from the model-list refresh path:
+    `/sync-models` calls upstream list_models and updates the model catalog,
+    while this function checks availability/latency for current models.
+    """
+    sm = session_maker or get_session_maker()
+    scheduled = 0
+    skipped = 0
+    async with sm() as session:
+        result = await session.execute(select(Provider).where(uuid_equals(Provider.uuid_id, provider_uuid)))
+        provider = result.scalar_one_or_none()
+        if provider is None or not provider.enabled:
+            return 0, 1
+        models = list(
+            (
+                await session.execute(
+                    select(Model).where(
+                        Model.provider_id == provider.id,
+                        Model.enabled.is_(True),
+                        Model.deleted_at.is_(None),
+                        Model.type.in_((ModelType.chat, ModelType.vision)),
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+    for model in models:
+        if await trigger_now(provider_uuid, model.uuid_id, session_maker=sm):
+            scheduled += 1
+        else:
+            skipped += 1
+    return scheduled, skipped
+
+
 async def trigger_all_models_now(
     session_maker=None,
 ) -> tuple[int, int]:
-    """Schedule a fresh probe for every enabled provider+model.
+    """Schedule status checks for every enabled provider's probeable models.
 
     Returns (scheduled, skipped):
-    - scheduled: number of probes that were actually enqueued
-    - skipped: number of (provider, model) pairs that were skipped
+    - scheduled: number of model status checks that were actually enqueued
+    - skipped: number of disabled/unavailable targets skipped
       (provider disabled, model disabled, model soft-deleted, etc.)
 
-    Used by the dashboard "Refresh all" button and the page-mount
-    auto-refresh, so the user sees fresh availability numbers instead
+    Used by the dashboard "Check all model status" button, so the user
+    sees fresh availability numbers instead
     of a stale snapshot from whenever the periodic scheduler last ran.
 
     Concurrency: rely on APScheduler's max_instances=1 + coalesce=True
@@ -487,26 +505,9 @@ async def trigger_all_models_now(
             )).scalars().all()
         )
         for p in providers:
-            # One list_models probe per provider
-            if await trigger_now(p.uuid_id, None, session_maker=sm):
-                scheduled += 1
-            else:
-                skipped += 1
-            # One chat_completion probe per enabled model
-            models = list(
-                (await session.execute(
-                    select(Model).where(
-                        Model.provider_id == p.id,
-                        Model.enabled.is_(True),
-                        Model.deleted_at.is_(None),
-                    )
-                )).scalars().all()
-            )
-            for m in models:
-                if await trigger_now(p.uuid_id, m.uuid_id, session_maker=sm):
-                    scheduled += 1
-                else:
-                    skipped += 1
+            provider_scheduled, provider_skipped = await trigger_provider_now(p.uuid_id, session_maker=sm)
+            scheduled += provider_scheduled
+            skipped += provider_skipped
     return scheduled, skipped
 
 
@@ -556,6 +557,7 @@ async def _random_probe_sweep() -> None:
                     Provider.enabled.is_(True),
                     Model.deleted_at.is_(None),
                     Model.enabled.is_(True),
+                    Model.type.in_((ModelType.chat, ModelType.vision)),
                 )
             )
         ).all()

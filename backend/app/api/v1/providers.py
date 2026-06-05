@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -10,9 +11,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.http import get_client
 from app.core.scheduler import (
     sync_jobs_for_provider,
-    trigger_now,
+    trigger_provider_now,
 )
-from app.db.models import ProviderKind
+from app.db.models import ModelType, ProbeTarget, ProviderKind
 from app.db.session import get_session
 from app.probers import get_prober
 from app.schemas.api import (
@@ -24,6 +25,7 @@ from app.schemas.api import (
 )
 from app.services import models as models_svc
 from app.services import providers as providers_svc
+from app.services import results as results_svc
 
 router = APIRouter(prefix="/providers", tags=["providers"])
 
@@ -73,7 +75,7 @@ async def delete(provider_id: uuid.UUID, session: AsyncSession = Depends(get_ses
 
 @router.post("/{provider_id}/sync-models", response_model=ApiResponse)
 async def sync_models(provider_id: uuid.UUID, session: AsyncSession = Depends(get_session)) -> ApiResponse:
-    """Manually trigger a list_models probe right now."""
+    """Refresh the provider's model list with an inline list_models call."""
     p = await providers_svc.get_provider(session, provider_id)
     if p is None:
         raise HTTPException(status_code=404, detail="provider not found")
@@ -81,6 +83,9 @@ async def sync_models(provider_id: uuid.UUID, session: AsyncSession = Depends(ge
     client = get_client()
     prober = get_prober(ProviderKind(p.kind), client)
     outcome = await prober.list_models(p)
+    # Record the outcome so the dashboard sees a fresh list_models result
+    # (overwriting any stale 404 from before a URL fix or fallback update).
+    await results_svc.record_outcome(session, p, None, ProbeTarget.list_models, outcome)
     if not outcome.success:
         raise HTTPException(
             status_code=502,
@@ -99,15 +104,61 @@ async def list_models(provider_id: uuid.UUID, session: AsyncSession = Depends(ge
     return ApiResponse(data=[ModelOut.model_validate(m) for m in items])
 
 
+@router.post("/{provider_id}/models", response_model=ApiResponse, status_code=201)
+async def add_model(
+    provider_id: uuid.UUID,
+    body: dict[str, Any],
+    session: AsyncSession = Depends(get_session),
+) -> ApiResponse:
+    """Manually add a model to a provider.
+
+    Used when the upstream does not expose a /v1/models endpoint
+    (e.g. MiniMax) so the user can still register models for probing.
+    """
+    p = await providers_svc.get_provider(session, provider_id)
+    if p is None:
+        raise HTTPException(status_code=404, detail="provider not found")
+    model_id = body.get("model_id")
+    if not model_id or not isinstance(model_id, str):
+        raise HTTPException(status_code=400, detail="model_id is required")
+    # Check for duplicates (active or soft-deleted)
+    from sqlalchemy import select
+    from app.db.models import Model
+
+    existing = await session.scalar(
+        select(Model).where(
+            Model.provider_id == p.id,
+            Model.model_id == model_id,
+            Model.deleted_at.is_(None),
+        )
+    )
+    if existing is not None:
+        raise HTTPException(status_code=409, detail=f"model {model_id!r} already exists")
+    m = Model(
+        provider_id=p.id,
+        model_id=model_id,
+        display_name=body.get("display_name") or None,
+        type=body.get("type") or ModelType.chat,
+        enabled=True,
+        is_favorite=False,
+    )
+    session.add(m)
+    await session.commit()
+    await session.refresh(m)
+    # Re-sync jobs so the new model gets a probe schedule
+    await sync_jobs_for_provider(provider_id)
+    return ApiResponse(data=ModelOut.model_validate(m))
+
+
 @router.post("/{provider_id}/run", response_model=ApiResponse)
 async def run_now(provider_id: uuid.UUID, session: AsyncSession = Depends(get_session)) -> ApiResponse:
     p = await providers_svc.get_provider(session, provider_id)
     if p is None:
         raise HTTPException(status_code=404, detail="provider not found")
-    scheduled = await trigger_now(provider_id, None)
-    if not scheduled:
+    scheduled, skipped = await trigger_provider_now(provider_id)
+    if scheduled == 0 and skipped > 0:
         raise HTTPException(
             status_code=409,
-            detail="provider is disabled; enable it before triggering a probe",
+            detail="provider is disabled; enable it before checking model status",
         )
-    return ApiResponse(data={"scheduled": True})
+    return ApiResponse(data={"scheduled": scheduled, "skipped": skipped})

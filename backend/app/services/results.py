@@ -15,6 +15,9 @@ from app.probers.types import ProbeOutcome
 from app.schemas.api import DashboardFavoriteModel, DashboardOut, DashboardProvider
 from app.services import settings as settings_svc
 
+ERROR_HISTORY_LIMIT = 100
+ERROR_HISTORY_TTL = timedelta(minutes=15)
+
 
 def _model_status_from_failure(outcome: ProbeOutcome, consecutive_failures: int, threshold: int) -> str:
     if outcome.error_code == ErrorCode.auth or outcome.http_status in (401, 403):
@@ -118,6 +121,8 @@ async def record_outcome(
         await _update_model_status(session, model, outcome)
     await session.commit()
     await session.refresh(row)
+    if not outcome.success:
+        await cleanup_error_history(session)
     return row
 
 
@@ -153,26 +158,63 @@ async def list_results(
 
 async def list_recent_errors(
     session: AsyncSession,
-    limit: int = 200,
+    limit: int = ERROR_HISTORY_LIMIT,
 ) -> list[ProbeResult]:
     """Return failed probe results for the error history page.
 
     Pinned rows float to the top regardless of recency, ordered
     by `checked_at DESC` among themselves; non-pinned rows are
     ordered by `checked_at DESC` below them. The list is bounded
-    by `limit` total rows.
+    by `limit` total rows and the short error-history window.
     """
+    now = datetime.now(UTC).replace(tzinfo=None)
+    cutoff = now - ERROR_HISTORY_TTL
     # SQLite's CASE expression maps to ORDER BY.
     pinned_first = (ProbeResult.pinned.is_(True)).desc()
     stmt = (
         select(ProbeResult)
         .options(joinedload(ProbeResult.model), joinedload(ProbeResult.provider_rel))
-        .where(ProbeResult.success.is_(False))
+        .where(ProbeResult.success.is_(False), ProbeResult.checked_at >= cutoff)
         .order_by(pinned_first, ProbeResult.checked_at.desc())
-        .limit(limit)
+        .limit(min(limit, ERROR_HISTORY_LIMIT))
     )
     res = await session.execute(stmt)
     return list(res.scalars().all())
+
+
+async def cleanup_error_history(session: AsyncSession) -> int:
+    """Keep the visible error history short-lived and bounded.
+
+    Error history is an operator-facing notification log, not the long-term
+    metrics table. Failed rows older than 15 minutes are removed, then the
+    newest 100 failed rows are retained.
+    """
+    now = datetime.now(UTC).replace(tzinfo=None)
+    cutoff = now - ERROR_HISTORY_TTL
+    removed = 0
+    old = await session.execute(
+        delete(ProbeResult).where(
+            ProbeResult.success.is_(False),
+            ProbeResult.checked_at < cutoff,
+        )
+    )
+    removed += getattr(old, "rowcount", 0) or 0
+
+    keep_ids = (
+        select(ProbeResult.id)
+        .where(ProbeResult.success.is_(False))
+        .order_by(ProbeResult.checked_at.desc())
+        .limit(ERROR_HISTORY_LIMIT)
+    )
+    excess = await session.execute(
+        delete(ProbeResult).where(
+            ProbeResult.success.is_(False),
+            ProbeResult.id.not_in(keep_ids),
+        )
+    )
+    removed += getattr(excess, "rowcount", 0) or 0
+    await session.commit()
+    return removed
 
 
 async def pin_probe_result(session: AsyncSession, probe_uuid: uuid.UUID) -> bool:
@@ -482,7 +524,12 @@ async def dashboard(session: AsyncSession) -> DashboardOut:
                 provider_id=p.uuid_id,
                 name=p.name,
                 kind=p.kind,
+                base_url=p.base_url,
                 enabled=p.enabled,
+                interval_seconds=p.interval_seconds,
+                timeout_seconds=p.timeout_seconds,
+                proxy=p.proxy,
+                headers_json=p.headers_json,
                 model_count=len(models),
                 last_checked_at=last_row.checked_at if last_row else None,
                 last_status=provider_status,

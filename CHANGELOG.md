@@ -1,5 +1,29 @@
 # Changelog
 
+## Unreleased
+
+### ✨ Added
+- **MiniMax model list fallback**: `openai_base.py` serves a hard-coded model list when `GET /v1/models` returns 404, so providers like MiniMax that don't expose the endpoint still auto-populate models.
+- **Manual model add API**: `POST /api/v1/providers/{id}/models` lets users add a model by ID when auto-discovery isn't available.
+- **API Key visibility toggle**: Provider dialog shows an inline eye icon to switch between password dots and plaintext; pre-fills the current key on edit.
+- **Provider name editable**: Edit dialog no longer locks the name field.
+- **Probe target filtering**: `chat_completion` probes only run on `chat` and `vision` models; `image`/`audio`/`embedding` models are skipped (they don't support the chat completions endpoint).
+- **Sync-models records ProbeResult**: The `sync-models` endpoint now persists the `list_models` outcome so the dashboard sees fresh status immediately.
+
+### 🔧 Changed
+- **Removed local synthetic `rate_limit`**: The scheduler no longer manufactures fake `rate_limit` errors when the per-provider sliding-window limit is hit; it simply skips the probe. Only upstream-returned 429s are recorded.
+- **URL builder deduplicates `/v1`**: `_make_url()` avoids double `/v1` when `base_url` already ends with it (e.g. `https://api.minimaxi.com/v1`).
+
+### 🐛 Fixed
+- **MiniMax chat probes 404**: Fixed `base_url` double `/v1` causing all MiniMax chat probes to hit a non-existent endpoint.
+- **Dashboard stale `list_models` status**: After clicking "Sync models" the dashboard now reflects the latest result instead of an old failure.
+- **SSE broadcast skips empty subscribers**: `SseManager.broadcast()` short-circuits when there are no connected clients.
+
+### 📊 Test coverage
+- **90** backend tests (pytest)
+
+---
+
 ## 2026-06-04 (Phase 2)
 
 ### ✨ Added
