@@ -58,6 +58,47 @@ async def test_create_and_list_provider(session) -> None:
 
 
 @pytest.mark.asyncio
+async def test_find_duplicate_detects_same_base_url_and_key(session) -> None:
+    """Same (base_url, api_key) → duplicate. Different api_key at same
+    base_url → NOT duplicate (multi-account is allowed)."""
+    p1 = await providers_svc.create_provider(
+        session,
+        ProviderCreate(
+            name="acct-A",
+            kind=ProviderKind.openai,
+            base_url="https://api.openai.com",
+            api_key="sk-aaa",
+        ),
+    )
+    # Same base_url + same key → duplicate
+    dup = await providers_svc.find_duplicate(session, "https://api.openai.com", "sk-aaa")
+    assert dup is not None
+    assert dup.uuid_id == p1.uuid_id
+
+    # Same base_url, different key → NOT duplicate (multi-account)
+    assert (
+        await providers_svc.find_duplicate(session, "https://api.openai.com", "sk-bbb")
+    ) is None
+
+    # Different base_url, same key → NOT duplicate
+    assert (
+        await providers_svc.find_duplicate(session, "https://other.example.com", "sk-aaa")
+    ) is None
+
+    # No api_key → never duplicate (caller decides what to do with secrets-less rows)
+    assert (
+        await providers_svc.find_duplicate(session, "https://api.openai.com", None)
+    ) is None
+
+    # exclude_uuid lets the caller exclude the row being patched
+    assert (
+        await providers_svc.find_duplicate(
+            session, "https://api.openai.com", "sk-aaa", exclude_uuid=p1.uuid_id
+        )
+    ) is None
+
+
+@pytest.mark.asyncio
 async def test_patch_provider_updates_fields(session) -> None:
     p = await providers_svc.create_provider(
         session,

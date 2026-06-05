@@ -49,6 +49,36 @@ async def find_provider_by_uuid(
     return await get_provider(session, provider_uuid, include_deleted=include_deleted)
 
 
+async def find_duplicate(
+    session: AsyncSession,
+    base_url: str,
+    api_key: str | None,
+    exclude_uuid: uuid.UUID | None = None,
+) -> Provider | None:
+    """Find an existing active provider with the same (base_url, api_key).
+
+    Treats `base_url` as the canonical endpoint. Two providers with the
+    same base_url AND the same api_key are considered duplicates (the
+    "same account on the same endpoint" — there's no reason to monitor
+    that twice). Different api_keys at the same base_url are allowed
+    (multi-account scenario).
+
+    `exclude_uuid` lets the caller exclude a specific provider, e.g.
+    when patching the row itself.
+    """
+    if not api_key:
+        return None
+    query = select(Provider).where(
+        Provider.base_url == base_url,
+        Provider.api_key == api_key,
+        Provider.deleted_at.is_(None),
+    )
+    if exclude_uuid is not None:
+        query = query.where(~uuid_equals(Provider.uuid_id, exclude_uuid))
+    res = await session.execute(query)
+    return res.scalar_one_or_none()
+
+
 async def create_provider(session: AsyncSession, data: ProviderCreate) -> Provider:
     """Create a new provider.
 

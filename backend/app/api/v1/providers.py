@@ -41,6 +41,17 @@ async def create_(body: ProviderCreate, session: AsyncSession = Depends(get_sess
     # unique name check
     if any(p.name == body.name for p in await providers_svc.list_providers(session)):
         raise HTTPException(status_code=409, detail=f"provider name already exists: {body.name}")
+    # duplicate (base_url, api_key) check — same account on the same
+    # endpoint is almost certainly an accidental re-add
+    dup = await providers_svc.find_duplicate(session, body.base_url, body.api_key)
+    if dup is not None:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"another provider {dup.name!r} already uses the same base_url "
+                f"and api_key; refusing to create a duplicate"
+            ),
+        )
     p = await providers_svc.create_provider(session, body)
     await sync_jobs_for_provider(p.uuid_id)
     return ApiResponse(data=ProviderOut.model_validate(p))
@@ -58,6 +69,25 @@ async def read(provider_id: uuid.UUID, session: AsyncSession = Depends(get_sessi
 async def patch(
     provider_id: uuid.UUID, body: ProviderPatch, session: AsyncSession = Depends(get_session)
 ) -> ApiResponse:
+    # If the patch changes base_url or api_key, make sure the new
+    # combination doesn't collide with another existing provider.
+    if body.base_url is not None or body.api_key is not None:
+        current = await providers_svc.get_provider(session, provider_id)
+        if current is None:
+            raise HTTPException(status_code=404, detail="provider not found")
+        new_base_url = body.base_url if body.base_url is not None else current.base_url
+        new_api_key = body.api_key if body.api_key is not None else current.api_key
+        dup = await providers_svc.find_duplicate(
+            session, new_base_url, new_api_key, exclude_uuid=provider_id
+        )
+        if dup is not None:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"another provider {dup.name!r} already uses the same base_url "
+                    f"and api_key; refusing to create a duplicate"
+                ),
+            )
     p = await providers_svc.patch_provider(session, provider_id, body)
     if p is None:
         raise HTTPException(status_code=404, detail="provider not found")

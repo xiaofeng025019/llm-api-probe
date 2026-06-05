@@ -93,6 +93,44 @@ async def test_provider_duplicate_name_409(api_client: httpx.AsyncClient) -> Non
 
 
 @pytest.mark.asyncio
+async def test_provider_duplicate_base_url_and_key_409(api_client: httpx.AsyncClient) -> None:
+    """Two providers with different names but the same (base_url, api_key)
+    must be rejected — it's almost always an accidental re-add."""
+    r1 = await api_client.post(
+        "/api/v1/providers",
+        json={
+            "name": "acct-A",
+            "kind": "openai",
+            "base_url": "https://api.example.com",
+            "api_key": "sk-shared",
+        },
+    )
+    assert r1.status_code == 201
+    # Same base_url + same key, different name → 409
+    r2 = await api_client.post(
+        "/api/v1/providers",
+        json={
+            "name": "acct-A-dup",
+            "kind": "openai",
+            "base_url": "https://api.example.com",
+            "api_key": "sk-shared",
+        },
+    )
+    assert r2.status_code == 409
+    # Same base_url, DIFFERENT key → allowed (multi-account)
+    r3 = await api_client.post(
+        "/api/v1/providers",
+        json={
+            "name": "acct-B",
+            "kind": "openai",
+            "base_url": "https://api.example.com",
+            "api_key": "sk-other",
+        },
+    )
+    assert r3.status_code == 201
+
+
+@pytest.mark.asyncio
 async def test_provider_404(api_client: httpx.AsyncClient) -> None:
     import uuid
 
