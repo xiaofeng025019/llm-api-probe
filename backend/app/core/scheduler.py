@@ -294,7 +294,13 @@ def _upsert_job(
     except Exception:
         is_new = True
     next_run = datetime.now(UTC) if is_new else None
-    trigger = IntervalTrigger(seconds=interval, jitter=5)
+    # Scale jitter to the interval (10%) so 50 models with the same
+    # 120s cadence don't all fire within a 5s window — that creates
+    # bursts and makes the load look obviously scripted to upstream
+    # APIs. 10% jitter on 120s = ±12s, which is enough to spread
+    # them out and short enough that dashboards stay accurate.
+    jitter = max(5, interval // 10)
+    trigger = IntervalTrigger(seconds=interval, jitter=jitter)
     sched.add_job(
         _run_probe,
         trigger=trigger,
@@ -324,6 +330,9 @@ async def sync_all_jobs() -> None:
         head = job.id.split(":", 1)[0] + ":"
         if head not in valid_prefixes:
             sched.remove_job(job.id)
+    # Always have the background random-sweep job running, even if
+    # there are zero providers configured.
+    _ensure_random_sweep_job(sched)
 
 
 async def trigger_now(provider_uuid: uuid.UUID, model_uuid: uuid.UUID | None, session_maker=None) -> bool:
@@ -413,6 +422,87 @@ async def trigger_all_models_now(
 
 # set of in-flight probe tasks created by trigger_now; lets asyncio.discard them.
 _background_tasks: set[asyncio.Task[None]] = set()
+
+
+# ---------- random continuous probes ----------------------------------------
+
+
+# Cap on probes the random sweep schedules per tick. With a 20s
+# interval this means ~9 probes/minute in the background on top of
+# the periodic schedule — gentle enough for upstream APIs but enough
+# to keep the dashboard fresh without any explicit "Refresh all".
+RANDOM_SWEEP_PROBES_PER_TICK = 3
+RANDOM_SWEEP_INTERVAL_SECONDS = 20
+# Avoid re-probing a model that was probed very recently (random
+# sweep is a supplement, not a replacement for the periodic schedule).
+RANDOM_SWEEP_MIN_AGE_SECONDS = 30
+
+
+async def _random_probe_sweep() -> None:
+    """Background tick: pick a few random enabled models that haven't
+    been probed in the last few seconds and probe them.
+
+    The periodic schedule already handles every model on its own
+    interval. The random sweep is a *supplement* that:
+    - Spreads the load continuously instead of in bursts at
+      interval multiples.
+    - Looks more like human traffic to upstream APIs (which often
+      rate-limit or flag perfectly-periodic probes).
+    - Keeps the dashboard's "Available Models" counter fresh so
+      the user doesn't need to click "Refresh all" on page open.
+    """
+    import random
+
+    sm = get_session_maker()
+    cutoff = datetime.now(UTC).timestamp() - RANDOM_SWEEP_MIN_AGE_SECONDS
+    async with sm() as session:
+        # Build candidate list: enabled (provider, model) pairs.
+        rows = (
+            await session.execute(
+                select(Provider.uuid_id, Model.uuid_id, Model.status_checked_at)
+                .join(Model, Model.provider_id == Provider.id)
+                .where(
+                    Provider.deleted_at.is_(None),
+                    Provider.enabled.is_(True),
+                    Model.deleted_at.is_(None),
+                    Model.enabled.is_(True),
+                )
+            )
+        ).all()
+        if not rows:
+            return
+        # Filter: skip models probed very recently — the periodic job
+        # already covers them, no need to double up.
+        candidates: list[tuple[uuid.UUID, uuid.UUID]] = []
+        for provider_uuid, model_uuid, last_checked in rows:
+            if last_checked is None or last_checked.timestamp() <= cutoff:
+                candidates.append((provider_uuid, model_uuid))
+        if not candidates:
+            return
+        sample_size = min(RANDOM_SWEEP_PROBES_PER_TICK, len(candidates))
+        chosen = random.sample(candidates, sample_size)
+        for provider_uuid, model_uuid in chosen:
+            # trigger_now does its own enabled/deleted checks. If a
+            # model was disabled between the SELECT and the call, it
+            # just returns False and we move on.
+            await trigger_now(provider_uuid, model_uuid, session_maker=sm)
+
+
+def _ensure_random_sweep_job(sched: AsyncIOScheduler) -> None:
+    """Add the random sweep job to the scheduler if it's not already
+    there. Called from sync_all_jobs so settings changes and provider
+    re-syncs don't lose it."""
+    job_id = "background:random_probe_sweep"
+    if sched.get_job(job_id) is not None:
+        return
+    sched.add_job(
+        _random_probe_sweep,
+        trigger=IntervalTrigger(seconds=RANDOM_SWEEP_INTERVAL_SECONDS, jitter=5),
+        id=job_id,
+        replace_existing=True,
+        coalesce=True,
+        max_instances=1,
+    )
 
 
 # ---------- daily cleanup ---------------------------------------------------

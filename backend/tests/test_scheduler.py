@@ -5,6 +5,7 @@ from __future__ import annotations
 import httpx
 import pytest
 import respx
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.core.scheduler import (
@@ -179,3 +180,16 @@ async def test_trigger_now_returns_false_for_disabled_model(env) -> None:
         m.enabled = False
         await s.commit()
     assert await trigger_now(env["provider_id"], model_uuid, session_maker=env["sm"]) is False
+
+
+@pytest.mark.asyncio
+async def test_ensure_random_sweep_job_is_idempotent(env) -> None:
+    """Calling _ensure_random_sweep_job multiple times must not add
+    duplicate jobs."""
+    from app.core import scheduler as sched_mod
+    sched = sched_mod.get_scheduler()
+    sched_mod._ensure_random_sweep_job(sched)
+    sched_mod._ensure_random_sweep_job(sched)
+    sched_mod._ensure_random_sweep_job(sched)
+    matches = [j for j in sched.get_jobs() if j.id == "background:random_probe_sweep"]
+    assert len(matches) == 1
