@@ -25,6 +25,7 @@ import {
   KindIcon,
   IconActivity,
   IconClock,
+  IconArrowRight,
 } from "../components/Icons";
 import { Skeleton, SkeletonProviderCard, SkeletonStat } from "../components/Skeleton";
 import { pushToast } from "../components/Toast";
@@ -266,15 +267,6 @@ export function DashboardPage() {
                   key={p.provider_id}
                   className={`provider-card dashboard-provider-card${p.enabled ? "" : " dashboard-provider-paused"}`}
                   style={{ ["--status-color" as string]: statusColor(p.enabled ? p.last_status : null) }}
-                  onClick={() => nav(`/providers/${p.provider_id}`)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" || e.key === " ") {
-                      e.preventDefault();
-                      nav(`/providers/${p.provider_id}`);
-                    }
-                  }}
-                  role="button"
-                  tabIndex={0}
                   aria-label={`${p.name}, ${p.enabled ? t("status." + status) : t("dashboard.card.monitoringOff")}`}
                 >
                   <div className="head">
@@ -455,11 +447,7 @@ export function DashboardPage() {
                     </div>
                   )}
 
-                  <div
-                    className="actions"
-                    onClick={(e) => e.stopPropagation()}
-                    onKeyDown={(e) => e.stopPropagation()}
-                  >
+                  <div className="actions">
                     <button
                       className="ghost sm"
                       onClick={() => setEditingProvider(toProvider(p))}
@@ -533,6 +521,15 @@ export function DashboardPage() {
                       title={t("common.delete")}
                     >
                       <IconDelete />
+                    </button>
+                    <span className="grow" />
+                    <button
+                      className="primary sm dashboard-view-detail"
+                      onClick={() => nav(`/providers/${p.provider_id}`)}
+                      aria-label={`${t("dashboard.card.viewDetail")} ${p.name}`}
+                      title={t("dashboard.card.viewDetailTitle")}
+                    >
+                      {t("dashboard.card.viewDetail")} <IconArrowRight />
                     </button>
                   </div>
                 </article>

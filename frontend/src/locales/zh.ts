@@ -182,6 +182,8 @@ const zh = {
       delete: "删除",
       probeNow: "检测模型状态",
       probeNowTitle: "检测模型状态",
+      viewDetail: "查看详情",
+      viewDetailTitle: "打开该 provider 的详情页",
     },
   },
   providers: {

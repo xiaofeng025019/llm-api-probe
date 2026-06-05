@@ -181,6 +181,8 @@ const en = {
       delete: "Delete",
       probeNow: "Check model status",
       probeNowTitle: "Check model status",
+      viewDetail: "View details",
+      viewDetailTitle: "Open the detail page for this provider",
     },
   },
   providers: {

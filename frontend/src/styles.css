@@ -1358,6 +1358,26 @@ tbody tr:last-child td {
   margin-top: 14px;
   justify-content: flex-end;
   flex-wrap: wrap;
+  align-items: center;
+}
+
+.provider-card .actions .grow {
+  flex: 1;
+}
+
+/* Dashboard cards: not the whole card is clickable — the user clicks
+ * the "View details" button instead. So no pointer cursor or lift
+ * effect on the card itself. */
+.dashboard-provider-card {
+  cursor: default;
+}
+
+.dashboard-provider-card:hover {
+  transform: none;
+}
+
+.dashboard-view-detail {
+  font-weight: 600;
 }
 
 .dashboard-provider-list {
