@@ -328,70 +328,235 @@ def init_sse_hooks() -> None:
     )
 
 
+async def _resolve_probe_target(
+    session: AsyncSession,
+    provider_uuid: uuid.UUID,
+    model_uuid: uuid.UUID | None,
+    target: ProbeTarget,
+) -> tuple[Provider | None, Model | None, str | None]:
+    """Look up the provider + model for this probe. Returns the
+    resolved objects, plus the `model_id` string to send to the
+    prober (or None for list_models). Returns `(None, None, None)`
+    when the probe should be skipped (provider disabled / missing,
+    model disabled / wrong type, etc.).
+    """
+    result = await session.execute(
+        select(Provider).where(uuid_equals(Provider.uuid_id, provider_uuid))
+    )
+    provider = result.scalar_one_or_none()
+    if provider is None or not provider.enabled:
+        return None, None, None
+
+    model: Model | None = None
+    if model_uuid:
+        model_result = await session.execute(
+            select(Model).where(uuid_equals(Model.uuid_id, model_uuid))
+        )
+        model = model_result.scalar_one_or_none()
+
+    if target == ProbeTarget.chat_completion:
+        if model is None or not model.enabled:
+            return None, None, None
+        # Only chat and vision models support the chat completions
+        # endpoint; image/audio/embedding models should not be
+        # probed this way (they return 400 and create noise).
+        if model.type not in (ModelType.chat, ModelType.vision):
+            return None, None, None
+        return provider, model, model.model_id
+    return provider, model, None  # type: ignore[return-value]
+
+
+async def _execute_probe(
+    session: AsyncSession,
+    provider: Provider,
+    model: Model | None,
+    model_id_str: str | None,
+    target: ProbeTarget,
+) -> ProbeResult:
+    """Call the prober with a hard timeout, record the outcome in the
+    DB, and broadcast SSE events. Returns the recorded `ProbeResult`
+    row (single source of truth for the post-probe admin steps).
+    """
+    client = get_client()
+    prober = get_prober(provider.kind, client)
+    # Watchdog: enforce a hard upper bound on the probe call
+    # (provider.timeout_seconds is the configured probe-level
+    # timeout, but a misbehaving upstream that returns headers
+    # and never a body can keep the streaming iterator alive
+    # past it; `+ 5` is slack for connection setup + first byte).
+    # Without this, a single hung probe blocks APScheduler's
+    # `shutdown(wait=True)` indefinitely.
+    probe_timeout_s = max(5, provider.timeout_seconds + 5)
+    try:
+        if target == ProbeTarget.list_models:
+            outcome = await asyncio.wait_for(
+                prober.list_models(provider),
+                timeout=probe_timeout_s,
+            )
+        else:
+            outcome = await asyncio.wait_for(
+                prober.probe_chat(
+                    provider,
+                    model_id_str,
+                    prompt=get_settings().probe_prompt,
+                    max_tokens=get_settings().probe_max_tokens,
+                    stream=True,
+                ),
+                timeout=probe_timeout_s,
+            )
+    except (asyncio.TimeoutError, Exception) as e:
+        log.exception("probe task crashed: %s", e)
+        return await results_svc.record_outcome(
+            session,
+            provider,
+            model.id if model else None,
+            target,
+            _outcome_from_exception(e),
+        )
+    row = await results_svc.record_outcome(
+        session, provider, model.id if model else None, target, outcome
+    )
+    # On successful list_models, upsert discovered models
+    if target == ProbeTarget.list_models and outcome.success and outcome.models:
+        await upsert_discovered(session, provider.uuid_id, outcome.models)
+    # Broadcast SSE
+    sse = get_sse()
+    await sse.broadcast(
+        "probe.completed",
+        {
+            "id": row.uuid_id,
+            "provider_id": str(provider.uuid_id),
+            "model_id": str(model.uuid_id) if model else None,
+            "target": target.value,
+            "success": row.success,
+            "http_status": row.http_status,
+            "latency_ms": row.latency_ms,
+            "ttfb_ms": row.ttfb_ms,
+            "error_code": row.error_code.value if row.error_code else None,
+            "checked_at": row.checked_at.isoformat(),
+        },
+    )
+    if not row.success and model is not None and model.is_favorite:
+        await sse.broadcast(
+            "job.error",
+            {
+                "provider_id": str(provider.uuid_id),
+                "provider_name": provider.name,
+                "model_id": str(model.uuid_id) if model else None,
+                "model_name": model.model_id if model else None,
+                "model_is_favorite": True,
+                "error_code": row.error_code.value if row.error_code else None,
+                "message": row.error_message or row.error_code.value
+                if row.error_code
+                else "fail",
+            },
+        )
+    return row
+
+
+async def _post_probe_admin(
+    session: AsyncSession,
+    provider: Provider,
+    model: Model | None,
+    model_uuid: uuid.UUID | None,
+    target: ProbeTarget,
+    row: ProbeResult,
+) -> None:
+    """Update JobState, snap the success streak, and reschedule the
+    next firing. The static trigger interval is a floor — the
+    post-probe `modify_job` is what drives the dynamic multiplier
+    curve (adaptive backoff + idle throttling).
+    """
+    provider_uuid = provider.uuid_id
+    job_key = _job_key(provider_uuid, model_uuid, target)
+    js = await session.get(JobState, job_key)
+    if js is None:
+        js = JobState(job_key=job_key)
+        session.add(js)
+    js.last_run_at = datetime.now(UTC)
+    ok = bool(row.success)
+    js.last_status = "ok" if ok else "fail"
+    await session.commit()
+
+    if target == ProbeTarget.chat_completion and model_uuid is not None and model is not None:
+        _bump_streak(model_uuid, ok)
+        base_interval = await _model_base_interval(session, model)
+        effective = _effective_interval(model_uuid, base_interval)
+        # Small jitter (10% of effective, min 5s) so a batch of
+        # post-probe reschedules from a "Refresh all" don't
+        # land on the same instant in the future.
+        import random as _random
+
+        jitter = max(5, effective // 10)
+        next_at = datetime.now(UTC) + timedelta(seconds=effective + _random.randint(0, jitter))
+        with contextlib.suppress(JobLookupError):
+            # modify_job raises JobLookupError if the job was
+            # removed between probe start and now (e.g. provider
+            # deleted mid-probe). The next sync_jobs cycle
+            # will rebuild it, so swallowing is fine. Other
+            # exceptions (e.g. SQLite "database is locked") are
+            # genuine and should be logged.
+            get_scheduler().modify_job(job_key, next_run_time=next_at)
+
+
+async def _refresh_cached_settings(session: AsyncSession) -> int:
+    """Refresh the cached scheduler toggles + the per-provider rate
+    limit. Cheap (single keyed reads on a tiny table); we don't gate
+    this on dirty-ness because a Settings save should propagate
+    within one probe interval.
+    """
+    global _adaptive_backoff_enabled, _idle_throttle_enabled
+    _adaptive_backoff_enabled = await settings_svc.get_bool_setting(
+        session,
+        settings_svc.ADAPTIVE_BACKOFF_ENABLED_KEY,
+        settings_svc.DEFAULT_ADAPTIVE_BACKOFF_ENABLED,
+    )
+    _idle_throttle_enabled = await settings_svc.get_bool_setting(
+        session,
+        settings_svc.IDLE_THROTTLE_ENABLED_KEY,
+        settings_svc.DEFAULT_IDLE_THROTTLE_ENABLED,
+    )
+    return await settings_svc.get_int_setting(
+        session,
+        settings_svc.PROVIDER_RATE_LIMIT_KEY,
+        settings_svc.DEFAULT_PROVIDER_RATE_LIMIT_PER_MINUTE,
+        minimum=1,
+        maximum=100,
+    )
+
+
 async def _run_probe(
     provider_uuid: uuid.UUID,
     model_uuid: uuid.UUID | None,
     target: ProbeTarget,
     session_maker=None,
 ) -> None:
-    """Single probe run: fetch provider/model from DB, call prober, persist result."""
+    """Orchestrator. The four sub-steps are now independent helpers
+    (each unit-testable in isolation):
+
+    1. _resolve_probe_target   — DB lookup + skip predicates
+    2. _refresh_cached_settings — per-probe cache refresh
+    3. _execute_probe          — prober call + recording + SSE
+    4. _post_probe_admin       — JobState + streak + reschedule
+    """
     sm = session_maker or get_session_maker()
     try:
         async with sm() as session:
-            # Look up provider by UUID
-            result = await session.execute(
-                select(Provider).where(uuid_equals(Provider.uuid_id, provider_uuid))
+            # 1. Resolve the target (provider, model, model_id_str).
+            provider, model, model_id_str = await _resolve_probe_target(
+                session, provider_uuid, model_uuid, target
             )
-            provider = result.scalar_one_or_none()
-            if provider is None or not provider.enabled:
+            if provider is None:
                 return
 
-            # Look up model by UUID if provided
-            model: Model | None = None
-            if model_uuid:
-                model_result = await session.execute(
-                    select(Model).where(uuid_equals(Model.uuid_id, model_uuid))
-                )
-                model = model_result.scalar_one_or_none()
-
-            if target == ProbeTarget.chat_completion:
-                if model is None or not model.enabled:
-                    return
-                # Only chat and vision models support the chat completions
-                # endpoint; image/audio/embedding models should not be
-                # probed this way (they return 400 and create noise).
-                if model.type not in (ModelType.chat, ModelType.vision):
-                    return
-                model_id_str: str = model.model_id
-            else:
-                model_id_str = None  # type: ignore[assignment]
-
-            # Acquire semaphores
+            # 2. Acquire semaphores + refresh cached settings + check
+            #    rate limit. Skipping the probe here is a no-op (the
+            #    rate limit is enforced by the scheduler, not the
+            #    prober).
             root = get_root_sem()
             psem = _get_provider_sem(provider_uuid)
             async with root, psem:
-                rate_limit = await settings_svc.get_int_setting(
-                    session,
-                    settings_svc.PROVIDER_RATE_LIMIT_KEY,
-                    settings_svc.DEFAULT_PROVIDER_RATE_LIMIT_PER_MINUTE,
-                    minimum=1,
-                    maximum=100,
-                )
-                # Cheap: refresh the cached toggles every probe so a
-                # Settings save propagates within one probe interval.
-                # We don't gate this on dirty-ness — get_bool_setting is
-                # a single keyed read on a tiny table.
-                global _adaptive_backoff_enabled, _idle_throttle_enabled
-                _adaptive_backoff_enabled = await settings_svc.get_bool_setting(
-                    session,
-                    settings_svc.ADAPTIVE_BACKOFF_ENABLED_KEY,
-                    settings_svc.DEFAULT_ADAPTIVE_BACKOFF_ENABLED,
-                )
-                _idle_throttle_enabled = await settings_svc.get_bool_setting(
-                    session,
-                    settings_svc.IDLE_THROTTLE_ENABLED_KEY,
-                    settings_svc.DEFAULT_IDLE_THROTTLE_ENABLED,
-                )
+                rate_limit = await _refresh_cached_settings(session)
                 allowed, retry_after = _check_provider_rate_limit(provider_uuid, rate_limit)
                 if not allowed:
                     log.info(
@@ -402,121 +567,16 @@ async def _run_probe(
                     )
                     return
 
-                client = get_client()
-                prober = get_prober(provider.kind, client)
-                # Watchdog: enforce a hard upper bound on the probe call
-                # (provider.timeout_seconds is the configured probe-level
-                # timeout, but a misbehaving upstream that returns headers
-                # and never a body can keep the streaming iterator alive
-                # past it; `+ 5` is slack for connection setup + first byte).
-                # Without this, a single hung probe blocks APScheduler's
-                # `shutdown(wait=True)` indefinitely.
-                probe_timeout_s = max(5, provider.timeout_seconds + 5)
-                try:
-                    if target == ProbeTarget.list_models:
-                        outcome = await asyncio.wait_for(
-                            prober.list_models(provider),
-                            timeout=probe_timeout_s,
-                        )
-                    else:
-                        outcome = await asyncio.wait_for(
-                            prober.probe_chat(
-                                provider,
-                                model_id_str,
-                                prompt=get_settings().probe_prompt,
-                                max_tokens=get_settings().probe_max_tokens,
-                                stream=True,
-                            ),
-                            timeout=probe_timeout_s,
-                        )
-                except (asyncio.TimeoutError, Exception) as e:
-                    log.exception("probe task crashed: %s", e)
-                    await results_svc.record_outcome(
-                        session,
-                        provider,
-                        model.id if model else None,
-                        target,
-                        _outcome_from_exception(e),
-                    )
-                else:
-                    row = await results_svc.record_outcome(
-                        session, provider, model.id if model else None, target, outcome
-                    )
-                    # On successful list_models, upsert discovered models
-                    if target == ProbeTarget.list_models and outcome.success and outcome.models:
-                        await upsert_discovered(session, provider.uuid_id, outcome.models)
-                    # Broadcast SSE
-                    sse = get_sse()
-                    await sse.broadcast(
-                        "probe.completed",
-                        {
-                            "id": row.uuid_id,
-                            "provider_id": str(provider_uuid),
-                            "model_id": str(model_uuid) if model_uuid else None,
-                            "target": target.value,
-                            "success": row.success,
-                            "http_status": row.http_status,
-                            "latency_ms": row.latency_ms,
-                            "ttfb_ms": row.ttfb_ms,
-                            "error_code": row.error_code.value if row.error_code else None,
-                            "checked_at": row.checked_at.isoformat(),
-                        },
-                    )
-                    if not row.success and model is not None and model.is_favorite:
-                        await sse.broadcast(
-                            "job.error",
-                            {
-                                "provider_id": str(provider_uuid),
-                                "provider_name": provider.name,
-                                "model_id": str(model_uuid) if model_uuid else None,
-                                "model_name": model.model_id if model else None,
-                                "model_is_favorite": True,
-                                "error_code": row.error_code.value if row.error_code else None,
-                                "message": row.error_message or row.error_code.value
-                                if row.error_code
-                                else "fail",
-                            },
-                        )
+                # 3. Execute the prober call (with hard timeout), record
+                #    the outcome, broadcast SSE events.
+                row = await _execute_probe(
+                    session, provider, model, model_id_str, target
+                )
 
-                # Update JobState
-                job_key = _job_key(provider_uuid, model_uuid, target)
-                js = await session.get(JobState, job_key)
-                if js is None:
-                    js = JobState(job_key=job_key)
-                    session.add(js)
-                js.last_run_at = datetime.now(UTC)
-                # Use the recorded row (single source of truth) — the local
-                # `outcome` is None in the except branch, and the previously
-                # used `locals().get("outcome")` returned None on synthetic
-                # failures, mis-marking the JobState as "ok".
-                ok = bool(row.success)
-                js.last_status = "ok" if ok else "fail"
-                await session.commit()
-
-                # After every chat_completion probe, snap the success streak
-                # and reschedule the next firing via APScheduler. This is how
-                # adaptive backoff + idle throttling actually take effect —
-                # the trigger's static interval is a floor (it fires again if
-                # nothing modifies next_run_time), but the post-probe modify
-                # is what drives the dynamic multiplier curve.
-                if target == ProbeTarget.chat_completion and model_uuid is not None and model is not None:
-                    _bump_streak(model_uuid, ok)
-                    base_interval = await _model_base_interval(session, model)
-                    effective = _effective_interval(model_uuid, base_interval)
-                    # Small jitter (10% of effective, min 5s) so a batch of
-                    # post-probe reschedules from a "Refresh all" don't
-                    # land on the same instant in the future.
-                    import random as _random
-                    jitter = max(5, effective // 10)
-                    next_at = datetime.now(UTC) + timedelta(seconds=effective + _random.randint(0, jitter))
-                    with contextlib.suppress(JobLookupError):
-                        # modify_job raises JobLookupError if the job was
-                        # removed between probe start and now (e.g. provider
-                        # deleted mid-probe). The next sync_jobs cycle
-                        # will rebuild it, so swallowing is fine. Other
-                        # exceptions (e.g. SQLite "database is locked") are
-                        # genuine and should be logged.
-                        get_scheduler().modify_job(job_key, next_run_time=next_at)
+                # 4. Post-probe admin: JobState, streak, reschedule.
+                await _post_probe_admin(
+                    session, provider, model, model_uuid, target, row
+                )
     except (sa_exc.SQLAlchemyError, asyncio.CancelledError) as e:
         log.exception("probe run outer failure: %s", e)
 

@@ -9,6 +9,7 @@ from typing import Any
 import httpx
 
 from app.db.models import ErrorCode, ModelType, Provider
+from app.probers._streaming import stream_chat
 from app.probers.error_mapping import (
     map_exception_to_error,
     map_status_to_error,
@@ -110,62 +111,15 @@ class GeminiProber:
             "contents": [{"parts": [{"text": prompt}]}],
             "generationConfig": {"maxOutputTokens": max_tokens},
         }
-        t0 = time.perf_counter()
-        ttfb: int | None = None
-        try:
-            if not stream:
-                resp = await self._client.post(
-                    url,
-                    headers=self._headers(provider),
-                    json=body,
-                    timeout=provider.timeout_seconds,
-                )
-                latency = int((time.perf_counter() - t0) * 1000)
-                ok = 200 <= resp.status_code < 300
-                return ProbeOutcome(
-                    success=ok,
-                    http_status=resp.status_code,
-                    latency_ms=latency,
-                    error_code=None if ok else map_status_to_error(resp.status_code),
-                    error_message=None if ok else resp.text[:MAX_UPSTREAM_ERROR_BODY_CHARS] or None,
-                )
-
-            async with self._client.stream(
-                "POST",
-                url,
-                headers=self._headers(provider),
-                json=body,
-                timeout=provider.timeout_seconds,
-            ) as resp:
-                if not (200 <= resp.status_code < 300):
-                    err_text = (await resp.aread()).decode(errors="replace")
-                    return ProbeOutcome(
-                        success=False,
-                        http_status=resp.status_code,
-                        latency_ms=int((time.perf_counter() - t0) * 1000),
-                        error_code=map_status_to_error(resp.status_code),
-                        error_message=err_text[:MAX_UPSTREAM_ERROR_BODY_CHARS] or None,
-                    )
-                first_byte_at: float | None = None
-                async for chunk in resp.aiter_bytes():
-                    if not chunk:
-                        continue
-                    if first_byte_at is None:
-                        first_byte_at = time.perf_counter()
-                    if b'"finishReason"' in chunk:
-                        break
-                latency = int((time.perf_counter() - t0) * 1000)
-                if first_byte_at is not None:
-                    ttfb = int((first_byte_at - t0) * 1000)
-                return ProbeOutcome(
-                    success=True,
-                    http_status=resp.status_code,
-                    latency_ms=latency,
-                    ttfb_ms=ttfb,
-                )
-        except Exception as e:
-            latency = int((time.perf_counter() - t0) * 1000)
-            code, msg = map_exception_to_error(e)
-            return ProbeOutcome(
-                success=False, latency_ms=latency, ttfb_ms=ttfb, error_code=code, error_message=msg
-            )
+        # Gemini SSE streams end with b'"finishReason"'. Pass the byte
+        # sequence and let the shared stream_chat helper walk the stream.
+        return await stream_chat(
+            client=self._client,
+            method="POST",
+            url=url,
+            headers=self._headers(provider),
+            body=body,
+            timeout=provider.timeout_seconds,
+            terminator=b'"finishReason"',
+            non_stream=not stream,
+        )
