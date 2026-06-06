@@ -662,6 +662,22 @@ async def sync_all_jobs() -> None:
     for stale in [u for u in list(_model_success_streak.keys()) if u not in live_uuids]:
         _model_success_streak.pop(stale, None)
 
+    # Prune per-provider state (sems, rate-limit buckets) for any
+    # provider UUIDs that no longer exist. Without this, the dicts
+    # grow unboundedly across provider soft-delete + recreate cycles
+    # — the UUIDs change in the soft-delete case but the old semaphores
+    # would otherwise stick around forever.
+    provider_rows = (
+        await session.execute(
+            select(Provider.uuid_id).where(Provider.deleted_at.is_(None))
+        )
+    ).all()
+    live_provider_uuids = {r[0] for r in provider_rows}
+    for stale in [u for u in list(_provider_sems.keys()) if u not in live_provider_uuids]:
+        _provider_sems.pop(stale, None)
+    for stale in [u for u in list(_provider_rate_buckets.keys()) if u not in live_provider_uuids]:
+        _provider_rate_buckets.pop(stale, None)
+
 
 async def trigger_now(provider_uuid: uuid.UUID, model_uuid: uuid.UUID | None, session_maker=None) -> bool:
     """Run a probe right now. Returns True if a probe was actually scheduled,
