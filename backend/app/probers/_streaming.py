@@ -26,6 +26,7 @@ from app.probers.error_mapping import (
     map_status_to_error,
     map_exception_to_log_message,
     map_exception_to_user_message,
+    parse_retry_after,
 )
 from app.probers.types import MAX_UPSTREAM_ERROR_BODY_CHARS, ProbeOutcome
 
@@ -80,6 +81,13 @@ async def stream_chat(
                     latency_ms=int((time.perf_counter() - t0) * 1000),
                     error_code=map_status_to_error(resp.status_code),
                     error_message=err_text[:MAX_UPSTREAM_ERROR_BODY_CHARS] or None,
+                    # 429s usually carry Retry-After; surface it so the
+                    # scheduler can set a per-provider cooldown.
+                    retry_after_seconds=(
+                        parse_retry_after(resp.headers.get("Retry-After"))
+                        if resp.status_code == 429
+                        else None
+                    ),
                 )
             first_byte_at: float | None = None
             async for chunk in resp.aiter_bytes():

@@ -50,6 +50,7 @@ const zh = {
   status: {
     disabled: "已停用",
     online: "在线",
+    stale: "未探",
     suspect: "可疑",
     offline: "离线",
     rateLimited: "限流",

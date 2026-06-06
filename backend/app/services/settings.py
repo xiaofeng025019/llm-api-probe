@@ -27,12 +27,13 @@ ADAPTIVE_BACKOFF_ENABLED_KEY = "adaptive_backoff_enabled"
 IDLE_THROTTLE_ENABLED_KEY = "idle_throttle_enabled"
 DEFAULT_ADAPTIVE_BACKOFF_ENABLED = True
 DEFAULT_IDLE_THROTTLE_ENABLED = True
-DEFAULT_FAVORITE_MODEL_INTERVAL_SECONDS = 300
-# Non-favorite models are checked less often than favorites to keep
-# upstream API volume reasonable, but not so long that the dashboard
-# has to wait many minutes for signal. 120s strikes a balance: signal
-# within 2 minutes, ~30 calls/model/hour worst case.
-DEFAULT_REGULAR_MODEL_INTERVAL_SECONDS = 120
+DEFAULT_FAVORITE_MODEL_INTERVAL_SECONDS = 60
+# Regular models are barely used (the user marked favorites for the
+# ones they actually care about), so we probe them much less often
+# than favorites. 15 minutes is a reasonable upper bound: a rarely-
+# used model that's gone offline is still discovered in time for
+# the next user-initiated check, without burning upstream tokens.
+DEFAULT_REGULAR_MODEL_INTERVAL_SECONDS = 900
 DEFAULT_FAVORITE_MODEL_FAILURE_CONFIRMATIONS = 2
 DEFAULT_REGULAR_MODEL_FAILURE_CONFIRMATIONS = 3
 # Hard ceiling on probes-per-minute to one provider. Prevents the

@@ -134,6 +134,7 @@ class ProbeResultOut(BaseModel):
     ttfb_ms: int | None
     error_code: ErrorCode | None
     error_message: str | None
+    retry_after_seconds: int | None
     checked_at: datetime
     # UUID snapshots — stable target identifiers captured at probe time.
     # Use these for historical reporting that must survive provider/model

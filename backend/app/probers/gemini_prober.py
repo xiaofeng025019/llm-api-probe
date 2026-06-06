@@ -13,6 +13,7 @@ from app.probers._streaming import stream_chat
 from app.probers.error_mapping import (
     map_exception_to_error,
     map_status_to_error,
+    parse_retry_after,
 )
 from app.probers.model_classify import classify_model_id
 from app.probers.types import MAX_UPSTREAM_ERROR_BODY_CHARS, DiscoveredModel, ProbeOutcome
@@ -57,6 +58,11 @@ class GeminiProber:
                 latency_ms=latency,
                 error_code=map_status_to_error(resp.status_code),
                 error_message=resp.text[:MAX_UPSTREAM_ERROR_BODY_CHARS] or None,
+                retry_after_seconds=(
+                    parse_retry_after(resp.headers.get("Retry-After"))
+                    if resp.status_code == 429
+                    else None
+                ),
             )
 
         try:

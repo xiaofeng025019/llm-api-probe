@@ -143,6 +143,12 @@ class ProbeResult(Base):
     ttfb_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
     error_code: Mapped[ErrorCode | None] = mapped_column(SAEnum(ErrorCode), nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # If the upstream told us to back off (HTTP 429 + Retry-After), the
+    # parsed seconds are persisted here so historical reporting can see
+    # when the provider was throttling. The scheduler reads this on
+    # the same probe cycle to set a per-provider cooldown so we
+    # don't re-probe immediately.
+    retry_after_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
     checked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     # String snapshots — capture the upstream-visible identity at probe time.

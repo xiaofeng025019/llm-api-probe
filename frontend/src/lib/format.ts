@@ -39,6 +39,10 @@ export function modelHealthClass(status: string | null | undefined, enabled = tr
   if (status === "online") return "ok";
   if (status === "offline" || status === "unauthorized" || status === "not_found") return "fail";
   if (status === "suspect" || status === "rate_limited") return "warn";
+  // "stale" is informational: not a failure (the model is
+  // presumably still online), but also not "ok" — we haven't
+  // actually checked recently. Same visual tier as "suspect".
+  if (status === "stale") return "warn";
   return "unknown";
 }
 
@@ -46,6 +50,7 @@ export function modelHealthLabel(status: string | null | undefined, enabled = tr
   if (!enabled) return i18nT("status.disabled");
   if (status === "online") return i18nT("status.online");
   if (status === "suspect") return i18nT("status.suspect");
+  if (status === "stale") return i18nT("status.stale");
   if (status === "offline") return i18nT("status.offline");
   if (status === "rate_limited") return i18nT("status.rateLimited");
   if (status === "unauthorized") return i18nT("status.unauthorized");

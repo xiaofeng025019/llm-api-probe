@@ -49,6 +49,7 @@ const en = {
   status: {
     disabled: "disabled",
     online: "online",
+    stale: "stale",
     suspect: "suspect",
     offline: "offline",
     rateLimited: "rate limited",

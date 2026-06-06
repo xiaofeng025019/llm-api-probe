@@ -26,6 +26,72 @@ ERROR_HISTORY_TTL = timedelta(minutes=15)
 MAX_PERSISTED_ERROR_MESSAGE_CHARS = 1000
 
 
+# Multiplier applied to a model's effective interval to decide when
+# a still-"online" model should be downgraded to "stale" in the
+# dashboard view. Picked at 2× so:
+#   - one missed probe (jitter, sweep overlap) never trips it;
+#   - two consecutive missed probes do.
+# 1× would be too twitchy (the first scheduled probe is *exactly*
+# interval seconds after the previous one; jitter alone can push
+# it past 1× × interval).
+STALE_THRESHOLD_MULTIPLIER = 2
+
+
+def _is_model_stale(
+    status: str | None,
+    last_checked_at: datetime | None,
+    interval_seconds: int,
+) -> bool:
+    """True if a model that *claims* to be online is actually too
+    old to trust.
+
+    Only "online" models can become stale — anything else (offline,
+    unauthorized, not_found, suspect, rate_limited, disabled) is a
+    known state that we don't want to paper over with a "stale"
+    label. And `last_checked_at is None` is treated as stale so
+    the UI surfaces never-probed models as a candidate for manual
+    probing instead of silently calling them "online".
+    """
+    if status != "online":
+        return False
+    if last_checked_at is None:
+        return True
+    if interval_seconds <= 0:
+        # Defensive: avoid silent flip on degenerate inputs.
+        return False
+    threshold = timedelta(seconds=interval_seconds * STALE_THRESHOLD_MULTIPLIER)
+    # SQLite via SQLAlchemy returns naive datetimes; treat naive
+    # values as UTC (which is what we always store). Mixing naive
+    # and aware in a subtraction raises TypeError, so normalize.
+    now = datetime.now(UTC)
+    checked = last_checked_at
+    if checked.tzinfo is None:
+        checked = checked.replace(tzinfo=UTC)
+    age = now - checked
+    return age > threshold
+
+
+async def _model_base_interval_for_dashboard(
+    session: AsyncSession, is_favorite: bool
+) -> int:
+    """Resolve the base (un-multiplied) interval for a model from the
+    favorite/regular settings. Mirrors `_model_base_interval` in the
+    scheduler so the dashboard's stale check uses the same number
+    the scheduler actually schedules against.
+    """
+    if is_favorite:
+        return await settings_svc.get_int_setting(
+            session,
+            settings_svc.FAVORITE_MODEL_INTERVAL_KEY,
+            settings_svc.DEFAULT_FAVORITE_MODEL_INTERVAL_SECONDS,
+        )
+    return await settings_svc.get_int_setting(
+        session,
+        settings_svc.REGULAR_MODEL_INTERVAL_KEY,
+        settings_svc.DEFAULT_REGULAR_MODEL_INTERVAL_SECONDS,
+    )
+
+
 def _model_status_from_failure(outcome: ProbeOutcome, consecutive_failures: int, threshold: int) -> str:
     if outcome.error_code == ErrorCode.auth or outcome.http_status in (401, 403):
         return "unauthorized"
@@ -110,6 +176,7 @@ async def record_outcome(
         ttfb_ms=outcome.ttfb_ms,
         error_code=outcome.error_code,
         error_message=(outcome.error_message[:MAX_PERSISTED_ERROR_MESSAGE_CHARS] if outcome.error_message else None),
+        retry_after_seconds=outcome.retry_after_seconds,
         # String snapshots — the upstream-visible identity at probe time.
         provider_name_at_probe=provider.name,
         model_id_at_probe=model.model_id if model else None,
@@ -526,7 +593,22 @@ async def dashboard(session: AsyncSession) -> DashboardOut:
                     display_name=m.display_name,
                     type=m.type,
                     enabled=m.enabled,
-                    status=m.status,
+                    # "stale" is a *display* status — the DB still says
+                    # "online", we just demote it in the API response
+                    # if the last probe is older than
+                    # STALE_THRESHOLD_MULTIPLIER × interval. This way
+                    # the dashboard can tell the user "this hasn't
+                    # been checked in a while" without us writing a
+                    # derived state to the model table.
+                    status=(
+                        "stale"
+                        if _is_model_stale(
+                            m.status,
+                            latest.checked_at if latest else None,
+                            await _model_base_interval_for_dashboard(session, m.is_favorite),
+                        )
+                        else m.status
+                    ),
                     status_reason=m.status_reason,
                     status_checked_at=m.status_checked_at,
                     status_confirmed_at=m.status_confirmed_at,

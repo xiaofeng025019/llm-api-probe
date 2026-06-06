@@ -31,6 +31,11 @@ class ProbeOutcome:
     error_code: ErrorCode | None = None
     error_message: str | None = None
     models: list[DiscoveredModel] = field(default_factory=list)
+    # If the upstream told us to back off (HTTP 429 + Retry-After), the
+    # parsed seconds go here. The scheduler uses this to set a per-
+    # provider cooldown so we stop hammering a rate-limited upstream.
+    # `None` for non-429 outcomes and for 429s without a Retry-After.
+    retry_after_seconds: int | None = None
 
 
 class Prober(Protocol):

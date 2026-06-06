@@ -116,6 +116,24 @@ def get_scheduler() -> AsyncIOScheduler:
 _provider_rate_buckets: dict[uuid.UUID, deque[float]] = {}
 
 
+# Per-provider "do not probe until this monotonic timestamp" cooldown.
+# Populated when the upstream returns 429 with a Retry-After (or, as a
+# fallback, after we get a 429 without one — see MAX_COOLDOWN_FALLBACK).
+# Consulted before the outbound rate-limit check in _run_probe so a
+# single 429 doesn't keep triggering until the next interval (which
+# can be 120-300s away, exactly the upstream's problem window).
+# Monotonic, in-memory; resets on process restart, same as
+# _provider_rate_buckets.
+_provider_cooldown_until: dict[uuid.UUID, float] = {}
+
+
+# Fallback cooldown when upstream returns 429 with no Retry-After.
+# Conservative default: most public LLM APIs that omit the header on
+# a 429 want you to back off for ~30s. Combined with the natural
+# interval (>=120s) this means a 429 is honored at least once.
+DEFAULT_429_COOLDOWN_SECONDS = 30
+
+
 def _check_provider_rate_limit(provider_uuid: uuid.UUID, limit_per_minute: int) -> tuple[bool, float]:
     """Sliding-window rate limit per provider.
 
@@ -138,6 +156,39 @@ def _check_provider_rate_limit(provider_uuid: uuid.UUID, limit_per_minute: int) 
         return False, max(0.0, retry_after)
     bucket.append(now)
     return True, 0.0
+
+
+def _check_provider_cooldown(provider_uuid: uuid.UUID) -> tuple[bool, float]:
+    """Return (active, retry_after_seconds). If `active` is True the
+    provider is in upstream-driven cooldown; the caller should skip
+    the probe. `retry_after_seconds` is how long until cooldown
+    expires (>= 0). No side effects: we don't pop the entry here so
+    the next caller also gets the same answer.
+    """
+    until = _provider_cooldown_until.get(provider_uuid)
+    if until is None:
+        return False, 0.0
+    remaining = until - time.monotonic()
+    if remaining <= 0:
+        # Cooldown expired — clean up so the next check is a fast path.
+        _provider_cooldown_until.pop(provider_uuid, None)
+        return False, 0.0
+    return True, remaining
+
+
+def _set_provider_cooldown(provider_uuid: uuid.UUID, seconds: int) -> None:
+    """Put the provider into upstream-driven cooldown for `seconds`
+    from now. Subsequent probes for that provider will be skipped
+    until the cooldown expires. The cooldown only extends, never
+    shortens — a fresh 429 with a longer Retry-After will bump it.
+    """
+    if seconds <= 0:
+        return
+    now = time.monotonic()
+    new_until = now + seconds
+    current = _provider_cooldown_until.get(provider_uuid, 0.0)
+    if new_until > current:
+        _provider_cooldown_until[provider_uuid] = new_until
 
 
 # ---------- adaptive backoff + idle throttling ------------------------------
@@ -561,13 +612,26 @@ async def _run_probe(
             await session.commit()
 
             # 2. Acquire semaphores + refresh cached settings + check
-            #    rate limit. Skipping the probe here is a no-op (the
-            #    rate limit is enforced by the scheduler, not the
-            #    prober).
+            #    upstream-driven cooldown (429 backoff) and our own
+            #    outbound rate limit. Both are no-op skips: a cooldown
+            #    just means the upstream recently told us to back off,
+            #    and the rate limit is enforced by the scheduler, not
+            #    the prober.
             root = get_root_sem()
             psem = _get_provider_sem(provider_uuid)
             async with root, psem:
                 rate_limit = await _refresh_cached_settings(session)
+                # Upstream cooldown (429 Retry-After) is checked first
+                # so a provider we've already been told to back off
+                # on doesn't even consume an outbound-rate slot.
+                cooldown_active, cooldown_retry = _check_provider_cooldown(provider_uuid)
+                if cooldown_active:
+                    log.info(
+                        "provider in upstream cooldown: provider=%s retry_after=%.1fs",
+                        provider_uuid,
+                        cooldown_retry,
+                    )
+                    return
                 allowed, retry_after = _check_provider_rate_limit(provider_uuid, rate_limit)
                 if not allowed:
                     log.info(
@@ -583,6 +647,17 @@ async def _run_probe(
                 row = await _execute_probe(
                     session, provider, model, model_id_str, target
                 )
+
+                # 3a. If the upstream told us to back off (HTTP 429),
+                #     set a per-provider cooldown so the next
+                #     scheduled probe is skipped until it expires.
+                #     Cooldown-only-extends (a longer Retry-After
+                #     bumps it; a shorter one is ignored).
+                if row.http_status == 429:
+                    _set_provider_cooldown(
+                        provider_uuid,
+                        row.retry_after_seconds or DEFAULT_429_COOLDOWN_SECONDS,
+                    )
 
                 # 4. Post-probe admin: JobState, streak + reschedule.
                 await _post_probe_admin(
@@ -881,7 +956,12 @@ _background_tasks: set[asyncio.Task[None]] = set()
 # the periodic schedule — gentle enough for upstream APIs but enough
 # to keep the dashboard fresh without any explicit "Refresh all".
 RANDOM_SWEEP_PROBES_PER_TICK = 3
-RANDOM_SWEEP_INTERVAL_SECONDS = 20
+# The random sweep is a supplement, not a replacement for the
+# periodic schedule. With the default favorite interval of 60s,
+# sweeping every 60s keeps regular models (now at 900s) from
+# going stale without re-probing focus models faster than their
+# own natural cadence.
+RANDOM_SWEEP_INTERVAL_SECONDS = 60
 # Avoid re-probing a model that was probed very recently (random
 # sweep is a supplement, not a replacement for the periodic schedule).
 RANDOM_SWEEP_MIN_AGE_SECONDS = 30

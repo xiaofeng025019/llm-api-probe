@@ -7,6 +7,9 @@ must be safe to show a human. Keep the verbose form for the log via
 """
 from __future__ import annotations
 
+from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
+
 import httpx
 
 from app.db.models import ErrorCode
@@ -80,3 +83,41 @@ def map_exception_to_error(exc: BaseException) -> tuple[ErrorCode, str]:
     can call `map_exception_to_log_message(exc)` directly.
     """
     return map_exception_to_user_message(exc)
+
+
+# Cap how long we'll respect a Retry-After value. Upstreams sometimes
+# return absurdly large numbers (some proxies return 86400 on every
+# 429); sleeping a day is never what a monitoring loop wants.
+MAX_RETRY_AFTER_SECONDS = 300
+
+
+def parse_retry_after(value: str | None) -> int | None:
+    """Parse an HTTP `Retry-After` header into seconds.
+
+    Per RFC 7231 the header can be either a delta-seconds (a
+    non-negative integer) or an HTTP-date. Returns None for empty /
+    unparseable input. Caps the result at MAX_RETRY_AFTER_SECONDS
+    so a misbehaving upstream can't park the scheduler for hours.
+    """
+    if not value:
+        return None
+    s = value.strip()
+    if not s:
+        return None
+    # delta-seconds form
+    if s.isdigit():
+        return min(int(s), MAX_RETRY_AFTER_SECONDS)
+    # HTTP-date form (e.g. "Wed, 21 Oct 2015 07:28:00 GMT")
+    try:
+        target = parsedate_to_datetime(s)
+    except (TypeError, ValueError):
+        return None
+    if target is None:
+        return None
+    # parsedate_to_datetime can return naive or aware; normalize.
+    if target.tzinfo is None:
+        target = target.replace(tzinfo=UTC)
+    delta = (target - datetime.now(UTC)).total_seconds()
+    if delta <= 0:
+        return 0
+    return min(int(delta), MAX_RETRY_AFTER_SECONDS)
