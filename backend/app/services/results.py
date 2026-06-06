@@ -36,6 +36,15 @@ MAX_PERSISTED_ERROR_MESSAGE_CHARS = 1000
 # it past 1× × interval).
 STALE_THRESHOLD_MULTIPLIER = 2
 
+# The stale check must account for the *maximum* interval the
+# scheduler could stretch a probe to.  A healthy model at peak
+# adaptive backoff (8×) with no SSE subscriber (idle 5×) probes
+# at most every `base_interval × 40` seconds.  Using the raw base
+# interval alone would make every healthy model stale the moment
+# it hits 8× backoff — MiniMax-M2.7 was flagged "未探" at 6.4h
+# even though the scheduler intentionally stretches to 3.3h.
+MAX_EFFECTIVE_MULTIPLIER = 40  # BACKOFF_MAX (8) × IDLE_MULTIPLIER (5)
+
 
 def _is_model_stale(
     status: str | None,
@@ -59,7 +68,7 @@ def _is_model_stale(
     if interval_seconds <= 0:
         # Defensive: avoid silent flip on degenerate inputs.
         return False
-    threshold = timedelta(seconds=interval_seconds * STALE_THRESHOLD_MULTIPLIER)
+    threshold = timedelta(seconds=interval_seconds * MAX_EFFECTIVE_MULTIPLIER * STALE_THRESHOLD_MULTIPLIER)
     # SQLite via SQLAlchemy returns naive datetimes; treat naive
     # values as UTC (which is what we always store). Mixing naive
     # and aware in a subtraction raises TypeError, so normalize.
@@ -71,9 +80,7 @@ def _is_model_stale(
     return age > threshold
 
 
-async def _model_base_interval_for_dashboard(
-    session: AsyncSession, is_favorite: bool
-) -> int:
+async def _model_base_interval_for_dashboard(session: AsyncSession, is_favorite: bool) -> int:
     """Resolve the base (un-multiplied) interval for a model from the
     favorite/regular settings. Mirrors `_model_base_interval` in the
     scheduler so the dashboard's stale check uses the same number
@@ -175,7 +182,9 @@ async def record_outcome(
         latency_ms=outcome.latency_ms,
         ttfb_ms=outcome.ttfb_ms,
         error_code=outcome.error_code,
-        error_message=(outcome.error_message[:MAX_PERSISTED_ERROR_MESSAGE_CHARS] if outcome.error_message else None),
+        error_message=(
+            outcome.error_message[:MAX_PERSISTED_ERROR_MESSAGE_CHARS] if outcome.error_message else None
+        ),
         retry_after_seconds=outcome.retry_after_seconds,
         # String snapshots — the upstream-visible identity at probe time.
         provider_name_at_probe=provider.name,
@@ -295,9 +304,7 @@ async def cleanup_error_history(session: AsyncSession) -> int:
 async def pin_probe_result(session: AsyncSession, probe_uuid: uuid.UUID) -> bool:
     """Mark a probe_result as pinned. Only failure rows can be pinned
     (a "pinned success" is meaningless — there's nothing to track)."""
-    res = await session.execute(
-        select(ProbeResult).where(uuid_equals(ProbeResult.uuid_id, probe_uuid))
-    )
+    res = await session.execute(select(ProbeResult).where(uuid_equals(ProbeResult.uuid_id, probe_uuid)))
     row = res.scalar_one_or_none()
     if row is None or row.success:
         return False
@@ -309,9 +316,7 @@ async def pin_probe_result(session: AsyncSession, probe_uuid: uuid.UUID) -> bool
 async def unpin_probe_result(session: AsyncSession, probe_uuid: uuid.UUID) -> bool:
     """Remove the pinned flag. The row itself stays in the table; the
     regular retention cleanup will eventually delete it."""
-    res = await session.execute(
-        select(ProbeResult).where(uuid_equals(ProbeResult.uuid_id, probe_uuid))
-    )
+    res = await session.execute(select(ProbeResult).where(uuid_equals(ProbeResult.uuid_id, probe_uuid)))
     row = res.scalar_one_or_none()
     if row is None:
         return False
@@ -472,6 +477,11 @@ async def dashboard(session: AsyncSession) -> DashboardOut:
         .all()
     )
     for row in recent_rows:
+        # row.provider_id can be None for orphaned probes (provider
+        # was hard-deleted, FK SET NULL kept the historical row).
+        # Skip those — they have no live provider to roll up into.
+        if row.provider_id is None:
+            continue
         recent_results_by_provider.setdefault(row.provider_id, []).append(row)
         model_id = row.model_id
         if model_id is None:
@@ -496,18 +506,15 @@ async def dashboard(session: AsyncSession) -> DashboardOut:
 
     latest_by_model: dict[int, ProbeResult] = {}
     latest_rows = (
-        (
-            await session.execute(
-                select(
-                    ProbeResult,
-                    _sa_func.row_number()
-                    .over(partition_by=ProbeResult.model_id, order_by=ProbeResult.checked_at.desc())
-                    .label("rn"),
-                ).where(ProbeResult.model_id.is_not(None))
-            )
+        await session.execute(
+            select(
+                ProbeResult,
+                _sa_func.row_number()
+                .over(partition_by=ProbeResult.model_id, order_by=ProbeResult.checked_at.desc())
+                .label("rn"),
+            ).where(ProbeResult.model_id.is_not(None))
         )
-        .all()
-    )
+    ).all()
     for row, rn in latest_rows:
         if rn != 1:
             continue
@@ -547,7 +554,9 @@ async def dashboard(session: AsyncSession) -> DashboardOut:
 
     for p in providers:
         models = models_by_provider.get(p.id, [])
-        last_row = recent_results_by_provider.get(p.id, [None])[0] if recent_results_by_provider.get(p.id) else None
+        last_row = (
+            recent_results_by_provider.get(p.id, [None])[0] if recent_results_by_provider.get(p.id) else None
+        )
         # Avoid the per-provider "latest row" round-trip — the per-provider
         # recent_results_by_provider is already sorted by checked_at desc.
         latest_list_models = None

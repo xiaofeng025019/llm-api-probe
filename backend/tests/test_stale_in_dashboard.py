@@ -41,8 +41,13 @@ async def test_dashboard_demotes_old_online_favorite_to_stale(
     session: AsyncSession,
 ) -> None:
     """A favorite model whose last successful probe is older than
-    2× the favorite interval must appear as `stale` in the
-    dashboard response (not `online`).
+    2× the *maximum effective* interval must appear as `stale` in
+    the dashboard response (not `online`).
+
+    The maximum effective interval is base × 40 (backoff 8× idle 5×).
+    With a default favorite base of 60s, the threshold is
+    60 × 40 × 2 = 4800s (80 min). A probe at 2 hours (7200s)
+    comfortably exceeds that.
     """
     provider = Provider(
         name="stale-test-provider",
@@ -64,16 +69,15 @@ async def test_dashboard_demotes_old_online_favorite_to_stale(
         is_favorite=True,
         enabled=True,
         status="online",
-        status_checked_at=datetime.now(UTC) - timedelta(hours=1),
-        last_success_at=datetime.now(UTC) - timedelta(hours=1),
+        status_checked_at=datetime.now(UTC) - timedelta(hours=2),
+        last_success_at=datetime.now(UTC) - timedelta(hours=2),
         consecutive_failures=0,
     )
     session.add(model)
     await session.flush()
 
-    # Insert an old successful probe (1 hour ago) — well past
-    # 2 × 60s = 120s threshold for a favorite with default settings.
-    old = datetime.now(UTC) - timedelta(hours=1)
+    # 2 hours ago — past 2 × (60 × 40) = 4800s threshold.
+    old = datetime.now(UTC) - timedelta(hours=2)
     session.add(
         ProbeResult(
             provider_id=provider.id,
@@ -95,9 +99,7 @@ async def test_dashboard_demotes_old_online_favorite_to_stale(
     assert len(out.providers) == 1
     favorites = out.providers[0].favorite_models
     assert len(favorites) == 1
-    assert favorites[0].status == "stale", (
-        f"expected 'stale', got {favorites[0].status!r}"
-    )
+    assert favorites[0].status == "stale", f"expected 'stale', got {favorites[0].status!r}"
 
 
 @pytest.mark.asyncio
@@ -211,6 +213,4 @@ async def test_dashboard_keeps_offline_favorite_as_offline(
 
     out = await results_svc.dashboard(session)
     favorites = out.providers[0].favorite_models
-    assert favorites[0].status == "offline", (
-        "an offline model must not be re-labelled stale"
-    )
+    assert favorites[0].status == "offline", "an offline model must not be re-labelled stale"

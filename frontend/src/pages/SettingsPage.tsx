@@ -5,19 +5,32 @@ import { withErrorToast, describeError } from "../lib/action";
 import { pushToast } from "../components/Toast";
 import { useT } from "../hooks/useT";
 
+// Each KNOWN_SETTINGS row carries the input type the UI should
+// render so numeric settings get a `type="number"` with min/max
+// matching the backend validator (see backend/app/services/settings.py
+// _INT_SETTING_BOUNDS / _BOOL_SETTING_KEYS). Without this, the user
+// could type "abc" and submit; the backend rejected it but the UI
+// previously gave no early feedback. Boolean rows render as a checkbox.
 const KNOWN_SETTINGS = [
-  { key: "default_interval_seconds", descKey: "settingsPage.setting.defaultInterval", defaultValue: "300" },
-  { key: "favorite_model_interval_seconds", descKey: "settingsPage.setting.favoriteInterval", defaultValue: "300" },
-  { key: "regular_model_interval_seconds", descKey: "settingsPage.setting.regularInterval", defaultValue: "600" },
-  { key: "provider_rate_limit_per_minute", descKey: "settingsPage.setting.providerRateLimit", defaultValue: "20" },
-  { key: "favorite_model_failure_confirmations", descKey: "settingsPage.setting.favoriteConfirm", defaultValue: "2" },
-  { key: "regular_model_failure_confirmations", descKey: "settingsPage.setting.regularConfirm", defaultValue: "3" },
-  { key: "default_timeout_seconds", descKey: "settingsPage.setting.defaultTimeout", defaultValue: "30" },
-  { key: "max_concurrency", descKey: "settingsPage.setting.maxConcurrency", defaultValue: "10" },
-  { key: "retention_days", descKey: "settingsPage.setting.retentionDays", defaultValue: "30" },
-  { key: "adaptive_backoff_enabled", descKey: "settingsPage.setting.adaptiveBackoff", defaultValue: "true" },
-  { key: "idle_throttle_enabled", descKey: "settingsPage.setting.idleThrottle", defaultValue: "true" },
+  { key: "default_interval_seconds", descKey: "settingsPage.setting.defaultInterval", defaultValue: "300", kind: "int", min: 10, max: 86400 },
+  { key: "favorite_model_interval_seconds", descKey: "settingsPage.setting.favoriteInterval", defaultValue: "300", kind: "int", min: 10, max: 86400 },
+  { key: "regular_model_interval_seconds", descKey: "settingsPage.setting.regularInterval", defaultValue: "600", kind: "int", min: 10, max: 86400 },
+  { key: "provider_rate_limit_per_minute", descKey: "settingsPage.setting.providerRateLimit", defaultValue: "20", kind: "int", min: 1, max: 1000 },
+  { key: "favorite_model_failure_confirmations", descKey: "settingsPage.setting.favoriteConfirm", defaultValue: "2", kind: "int", min: 1, max: 100 },
+  { key: "regular_model_failure_confirmations", descKey: "settingsPage.setting.regularConfirm", defaultValue: "3", kind: "int", min: 1, max: 100 },
+  { key: "default_timeout_seconds", descKey: "settingsPage.setting.defaultTimeout", defaultValue: "30", kind: "int", min: 2, max: 600 },
+  { key: "max_concurrency", descKey: "settingsPage.setting.maxConcurrency", defaultValue: "10", kind: "int", min: 1, max: 1000 },
+  { key: "retention_days", descKey: "settingsPage.setting.retentionDays", defaultValue: "30", kind: "int", min: 1, max: 3650 },
+  { key: "adaptive_backoff_enabled", descKey: "settingsPage.setting.adaptiveBackoff", defaultValue: "true", kind: "bool" },
+  { key: "idle_throttle_enabled", descKey: "settingsPage.setting.idleThrottle", defaultValue: "true", kind: "bool" },
 ] as const;
+
+/** Truthy set in the backend's `_TRUTHY_STRINGS`. We render bool rows
+ * as a checkbox; saving converts to "true"/"false" so the back-end
+ * validator accepts either form. */
+function isTruthy(v: string): boolean {
+  return ["true", "1", "yes", "on"].includes(v.trim().toLowerCase());
+}
 
 export function SettingsPage() {
   const t = useT();
@@ -120,17 +133,44 @@ export function SettingsPage() {
         </div>
         <div className="card">
           <div className="form-grid">
-            {KNOWN_SETTINGS.map(({ key, descKey }) => (
-              <div className="form-row" key={key}>
-                <label htmlFor={`setting-${key}`}>{key}</label>
-                <input
-                  value={values[key] ?? ""}
-                  onChange={(e) => setValues((v) => ({ ...v, [key]: e.target.value }))}
-                  id={`setting-${key}`}
-                  aria-describedby={`setting-${key}-hint`}
-                />
-                <span className="hint" id={`setting-${key}-hint`}>
-                  {t(descKey)}
+            {KNOWN_SETTINGS.map((setting) => (
+              <div className="form-row" key={setting.key}>
+                <label htmlFor={`setting-${setting.key}`}>{setting.key}</label>
+                {setting.kind === "bool" ? (
+                  <input
+                    id={`setting-${setting.key}`}
+                    type="checkbox"
+                    checked={isTruthy(values[setting.key] ?? setting.defaultValue)}
+                    onChange={(e) =>
+                      setValues((v) => ({
+                        ...v,
+                        [setting.key]: e.target.checked ? "true" : "false",
+                      }))
+                    }
+                    aria-describedby={`setting-${setting.key}-hint`}
+                  />
+                ) : (
+                  <input
+                    id={`setting-${setting.key}`}
+                    type="number"
+                    inputMode="numeric"
+                    min={setting.min}
+                    max={setting.max}
+                    step={1}
+                    value={values[setting.key] ?? ""}
+                    onChange={(e) =>
+                      setValues((v) => ({ ...v, [setting.key]: e.target.value }))
+                    }
+                    aria-describedby={`setting-${setting.key}-hint`}
+                  />
+                )}
+                <span className="hint" id={`setting-${setting.key}-hint`}>
+                  {t(setting.descKey)}
+                  {setting.kind === "int" && (
+                    <span className="muted" style={{ marginLeft: 6 }}>
+                      ({setting.min}–{setting.max})
+                    </span>
+                  )}
                 </span>
               </div>
             ))}

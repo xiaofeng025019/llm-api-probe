@@ -59,9 +59,7 @@ class GeminiProber:
                 error_code=map_status_to_error(resp.status_code),
                 error_message=resp.text[:MAX_UPSTREAM_ERROR_BODY_CHARS] or None,
                 retry_after_seconds=(
-                    parse_retry_after(resp.headers.get("Retry-After"))
-                    if resp.status_code == 429
-                    else None
+                    parse_retry_after(resp.headers.get("Retry-After")) if resp.status_code == 429 else None
                 ),
             )
 

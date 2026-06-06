@@ -5,6 +5,7 @@ the error history page in the UI, so the probers' return value here
 must be safe to show a human. Keep the verbose form for the log via
 `map_exception_to_log_message` — that's the one for the `repr()`.
 """
+
 from __future__ import annotations
 
 from datetime import UTC, datetime
@@ -13,7 +14,6 @@ from email.utils import parsedate_to_datetime
 import httpx
 
 from app.db.models import ErrorCode
-
 
 # Stable, user-facing strings keyed off exception class. The error
 # history page renders these verbatim so they must be short and

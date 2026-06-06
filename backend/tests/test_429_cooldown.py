@@ -11,7 +11,6 @@ Covers:
 
 from __future__ import annotations
 
-import asyncio
 import time
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -25,13 +24,11 @@ from app.core.scheduler import (
     _check_provider_cooldown,
     _set_provider_cooldown,
 )
-from app.db.models import ErrorCode, Provider, ProviderKind
+from app.db.models import ErrorCode
 from app.probers.error_mapping import (
     MAX_RETRY_AFTER_SECONDS,
     parse_retry_after,
 )
-from app.probers.types import ProbeOutcome
-
 
 # ---------- parse_retry_after -----------------------------------------------
 

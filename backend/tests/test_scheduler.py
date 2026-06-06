@@ -7,7 +7,6 @@ import uuid as _uuid
 import httpx
 import pytest
 import respx
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.core.scheduler import (
@@ -173,8 +172,11 @@ async def test_sync_jobs_uses_faster_interval_for_favorite_models(env) -> None:
 
 
 @pytest.mark.asyncio
-async def test_trigger_now_returns_false_when_disabled(env) -> None:
-    # Disabled provider should reject the trigger so the API can surface a 409.
+async def test_trigger_now_returns_deduped_when_provider_disabled(env) -> None:
+    # Disabled provider must reject the trigger so the API can
+    # surface a 409. New contract: returns EnqueueResult.DEDUPED.
+    from app.core.trigger_queue import EnqueueResult
+
     async with env["sm"]() as s:
         from sqlalchemy import select
 
@@ -184,16 +186,22 @@ async def test_trigger_now_returns_false_when_disabled(env) -> None:
         p = result.scalar_one()
         p.enabled = False
         await s.commit()
-    assert await trigger_now(env["provider_id"], None, session_maker=env["sm"]) is False
+    result = await trigger_now(env["provider_id"], None, session_maker=env["sm"])
+    assert result == EnqueueResult.DEDUPED
 
 
 @pytest.mark.asyncio
-async def test_trigger_now_returns_true_when_enabled(env) -> None:
-    assert await trigger_now(env["provider_id"], None, session_maker=env["sm"]) is True
+async def test_trigger_now_returns_enqueued_when_enabled(env) -> None:
+    from app.core.trigger_queue import EnqueueResult
+
+    result = await trigger_now(env["provider_id"], None, session_maker=env["sm"])
+    assert result == EnqueueResult.ENQUEUED
 
 
 @pytest.mark.asyncio
-async def test_trigger_now_returns_false_for_disabled_model(env) -> None:
+async def test_trigger_now_returns_deduped_for_disabled_model(env) -> None:
+    from app.core.trigger_queue import EnqueueResult
+
     async with env["sm"]() as s:
         ms = await models_svc.upsert_discovered(s, env["provider_id"], [DiscoveredModel(model_id="gpt-4o")])
         await s.commit()
@@ -202,7 +210,8 @@ async def test_trigger_now_returns_false_for_disabled_model(env) -> None:
         m = await s.get(Model, ms[0].id)
         m.enabled = False
         await s.commit()
-    assert await trigger_now(env["provider_id"], model_uuid, session_maker=env["sm"]) is False
+    result = await trigger_now(env["provider_id"], model_uuid, session_maker=env["sm"])
+    assert result == EnqueueResult.DEDUPED
 
 
 @pytest.mark.asyncio
@@ -210,6 +219,7 @@ async def test_ensure_random_sweep_job_is_idempotent(env) -> None:
     """Calling _ensure_random_sweep_job multiple times must not add
     duplicate jobs."""
     from app.core import scheduler as sched_mod
+
     sched = sched_mod.get_scheduler()
     sched_mod._ensure_random_sweep_job(sched)
     sched_mod._ensure_random_sweep_job(sched)
@@ -221,17 +231,17 @@ async def test_ensure_random_sweep_job_is_idempotent(env) -> None:
 def test_provider_rate_limit_sliding_window() -> None:
     """_check_provider_rate_limit must allow up to N requests in any
     60s window, then reject until the oldest timestamp ages out."""
-    import time as _time
     from app.core.scheduler import (
         _check_provider_rate_limit,
         _provider_rate_buckets,
     )
+
     test_uuid = _uuid.uuid4()
     _provider_rate_buckets.pop(test_uuid, None)
 
     for i in range(5):
         allowed, retry = _check_provider_rate_limit(test_uuid, limit_per_minute=5)
-        assert allowed, f"call {i+1} should be allowed (limit=5)"
+        assert allowed, f"call {i + 1} should be allowed (limit=5)"
         assert retry == 0.0
 
     allowed, retry = _check_provider_rate_limit(test_uuid, limit_per_minute=5)
@@ -248,6 +258,7 @@ def test_provider_rate_limit_per_provider_isolation() -> None:
         _check_provider_rate_limit,
         _provider_rate_buckets,
     )
+
     a, b = _uuid.uuid4(), _uuid.uuid4()
     _provider_rate_buckets.pop(a, None)
     _provider_rate_buckets.pop(b, None)
@@ -294,38 +305,42 @@ async def test_run_probe_increments_streak_on_success(env) -> None:
     from app.core import scheduler as sched_mod
 
     async with env["sm"]() as s:
-        ms = await models_svc.upsert_discovered(
-            s, env["provider_id"], [DiscoveredModel(model_id="gpt-4o")]
-        )
+        ms = await models_svc.upsert_discovered(s, env["provider_id"], [DiscoveredModel(model_id="gpt-4o")])
         await s.commit()
         model_uuid = ms[0].uuid_id
 
     assert sched_mod._model_success_streak.get(model_uuid, 0) == 0
 
+    # The OpenAI prober streams and expects b"[DONE]" as the
+    # terminator. Mock a realistic streamed body with the terminator
+    # so the streaming-success path is actually exercised.
+    sse_body = b'data: {"choices":[{"delta":{"content":"ok"}}]}\n\ndata: [DONE]\n\n'
     with respx.mock:
         respx.post("https://api.example.com/v1/chat/completions").mock(
             return_value=httpx.Response(
                 200,
-                json={"choices": [{"message": {"content": "ok"}}]},
+                headers={"content-type": "text/event-stream"},
+                content=sse_body,
             )
         )
-        await _run_probe(
-            env["provider_id"], model_uuid, ProbeTarget.chat_completion, env["sm"]
-        )
+        await _run_probe(env["provider_id"], model_uuid, ProbeTarget.chat_completion, env["sm"])
 
     assert sched_mod._model_success_streak.get(model_uuid, 0) == 1
 
 
 @pytest.mark.asyncio
-async def test_run_probe_resets_streak_on_failure(env) -> None:
-    """A failed chat probe must snap the streak back to 0 (key removed),
-    even if it was high before."""
+async def test_run_probe_halves_streak_on_failure(env) -> None:
+    """A failed chat probe must halve the streak (floor to 0), not snap
+    it to 0. Rationale: a model that built up a 25-probe success
+    streak at 4× multiplier earned that headroom — one transient
+    timeout shouldn't burn 25 successes. Halving (25 → 12) keeps the
+    model in a still-elevated 4× tier and naturally degrades on
+    repeated failure.
+    """
     from app.core import scheduler as sched_mod
 
     async with env["sm"]() as s:
-        ms = await models_svc.upsert_discovered(
-            s, env["provider_id"], [DiscoveredModel(model_id="gpt-4o")]
-        )
+        ms = await models_svc.upsert_discovered(s, env["provider_id"], [DiscoveredModel(model_id="gpt-4o")])
         await s.commit()
         model_uuid = ms[0].uuid_id
 
@@ -337,15 +352,39 @@ async def test_run_probe_resets_streak_on_failure(env) -> None:
         respx.post("https://api.example.com/v1/chat/completions").mock(
             side_effect=httpx.ConnectTimeout("slow")
         )
-        await _run_probe(
-            env["provider_id"], model_uuid, ProbeTarget.chat_completion, env["sm"]
-        )
+        await _run_probe(env["provider_id"], model_uuid, ProbeTarget.chat_completion, env["sm"])
 
-    # Key removed on failure → next backoff is 1× (base interval).
-    assert model_uuid not in sched_mod._model_success_streak
-    assert sched_mod._backoff_multiplier(
-        sched_mod._model_success_streak.get(model_uuid, 0)
-    ) == 1
+    # 25 // 2 = 12 — still in the 4× tier. Key remains in the dict
+    # (was popped before the change).
+    assert sched_mod._model_success_streak.get(model_uuid) == 12
+    assert sched_mod._backoff_multiplier(sched_mod._model_success_streak[model_uuid]) == 4
+
+
+@pytest.mark.asyncio
+async def test_run_probe_repeated_failure_eventually_reaches_base_interval(env) -> None:
+    """Halving on failure must still decay to 1× after enough failures —
+    a stuck mid-tier multiplier would mask a real outage.
+    """
+    from app.core import scheduler as sched_mod
+
+    async with env["sm"]() as s:
+        ms = await models_svc.upsert_discovered(s, env["provider_id"], [DiscoveredModel(model_id="gpt-4o")])
+        await s.commit()
+        model_uuid = ms[0].uuid_id
+
+    # Start with a long streak and apply several back-to-back failures
+    sched_mod._model_success_streak[model_uuid] = 60
+    with respx.mock:
+        respx.post("https://api.example.com/v1/chat/completions").mock(
+            side_effect=httpx.ConnectTimeout("slow")
+        )
+        for _ in range(6):
+            await _run_probe(env["provider_id"], model_uuid, ProbeTarget.chat_completion, env["sm"])
+
+    # 60 → 30 → 15 → 7 → 3 → 1 → 0: after 6 failures we land at 0
+    # (1× base interval). Anything ≤ 0 also returns 1×.
+    final = sched_mod._model_success_streak.get(model_uuid, 0)
+    assert final <= 0 or sched_mod._backoff_multiplier(final) == 1
 
 
 def test_idle_multiplier_zero_subscribers() -> None:

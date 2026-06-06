@@ -67,6 +67,7 @@ const en = {
   errors: {
     network: { title: "Network error", detail: "Check your connection and try again" },
     action: { title: "Action failed" },
+    retryIn: "Retry in ${seconds}s",
     title: "Error history",
     subtitle: "Recent probe failures. Pinned errors are kept until you remove them.",
     unknownCode: "unknown",

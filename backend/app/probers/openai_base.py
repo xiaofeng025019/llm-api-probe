@@ -22,7 +22,6 @@ from app.probers.error_mapping import (
 from app.probers.model_classify import classify_model_id
 from app.probers.types import MAX_UPSTREAM_ERROR_BODY_CHARS, DiscoveredModel, ProbeOutcome
 
-
 # Some providers claim "OpenAI compatible" but do not implement the
 # GET /v1/models endpoint (e.g. MiniMax).  When the upstream returns
 # 404 we fall back to a static model list so the dashboard can still
@@ -125,9 +124,7 @@ class OpenAIBaseProber:
             error_code=map_status_to_error(resp.status_code),
             error_message=resp.text[:MAX_UPSTREAM_ERROR_BODY_CHARS] or None,
             retry_after_seconds=(
-                parse_retry_after(resp.headers.get("Retry-After"))
-                if resp.status_code == 429
-                else None
+                parse_retry_after(resp.headers.get("Retry-After")) if resp.status_code == 429 else None
             ),
         )
 

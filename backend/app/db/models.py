@@ -79,12 +79,30 @@ class Provider(Base):
     )
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, default=None)
 
-    models: Mapped[list[Model]] = relationship(back_populates="provider", cascade="save-update, merge, refresh-expire")
+    models: Mapped[list[Model]] = relationship(
+        back_populates="provider", cascade="save-update, merge, refresh-expire"
+    )
 
 
 class Model(Base):
     __tablename__ = "models"
-    __table_args__ = (Index("ix_models_provider_model", "provider_id", "model_id"),)
+    __table_args__ = (
+        # Non-unique covering index for the common lookup (provider's models).
+        Index("ix_models_provider_model", "provider_id", "model_id"),
+        # Partial unique index: at most one *active* (not soft-deleted) row
+        # per (provider_id, model_id). Without this, two concurrent
+        # `POST /providers/{id}/models` calls with the same model_id
+        # could both pass the check-then-insert and create duplicate
+        # rows whose stats get double-counted on the dashboard. Soft-
+        # deleted rows are exempt so a re-create after delete still works.
+        Index(
+            "uq_models_provider_model_active",
+            "provider_id",
+            "model_id",
+            unique=True,
+            sqlite_where=text("deleted_at IS NULL"),
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     uuid_id: Mapped[uuid.UUID] = mapped_column(Uuid, unique=True, index=True, default=uuid.uuid4)
@@ -111,7 +129,9 @@ class Model(Base):
         assert self.provider is not None
         return self.provider.uuid_id
 
-    results: Mapped[list[ProbeResult]] = relationship(back_populates="model", cascade="save-update, merge, refresh-expire")
+    results: Mapped[list[ProbeResult]] = relationship(
+        back_populates="model", cascade="save-update, merge, refresh-expire"
+    )
 
 
 class ProbeResult(Base):
@@ -134,7 +154,9 @@ class ProbeResult(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     uuid_id: Mapped[uuid.UUID] = mapped_column(Uuid, unique=True, index=True, default=uuid.uuid4)
-    provider_id: Mapped[int | None] = mapped_column(ForeignKey("providers.id", ondelete="SET NULL"), nullable=True)
+    provider_id: Mapped[int | None] = mapped_column(
+        ForeignKey("providers.id", ondelete="SET NULL"), nullable=True
+    )
     model_id: Mapped[int | None] = mapped_column(ForeignKey("models.id", ondelete="SET NULL"), nullable=True)
     target: Mapped[ProbeTarget] = mapped_column(SAEnum(ProbeTarget))
     success: Mapped[bool]
@@ -167,7 +189,12 @@ class ProbeResult(Base):
     model_uuid_at_probe: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
 
     model: Mapped[Model | None] = relationship(back_populates="results")
-    provider_rel: Mapped[Provider] = relationship(lazy="joined")
+    # provider_rel can be None: the FK is ON DELETE SET NULL so a
+    # hard-deleted provider's rows have provider_id=NULL but keep
+    # `provider_uuid_at_probe` / `provider_name_at_probe` snapshots.
+    # The `provider_uuid` / `provider_name` properties fall back to
+    # those snapshots when this is None.
+    provider_rel: Mapped[Provider | None] = relationship(lazy="joined")
 
     # When True, this error is exempt from the regular retention
     # cleanup — the user explicitly pinned it from the error history

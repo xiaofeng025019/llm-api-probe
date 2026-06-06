@@ -10,6 +10,7 @@ Revises: e1f3a7b2c594
 Create Date: 2026-06-05 21:30:00.000000
 
 """
+
 from typing import Sequence, Union
 
 import sqlalchemy as sa

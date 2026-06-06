@@ -192,10 +192,59 @@ export class ApiError extends Error {
     public code: string,
     message: string,
     public cause?: unknown,
+    /** HTTP status (for 4xx/5xx responses). undefined for client-side errors. */
+    public status?: number,
+    /** Retry-After seconds (parsed from response header on 429/503). */
+    public retry_after_seconds?: number,
   ) {
     super(message);
     this.name = "ApiError";
   }
+}
+
+/** Parse a Retry-After header value (delta-seconds only — HTTP-date form is
+ * rejected for simplicity; the backend only emits delta-seconds). Returns
+ * undefined for missing/garbage. Exported for unit testing. */
+export function parseRetryAfter(value: string | null | undefined): number | undefined {
+  if (!value) return undefined;
+  const n = Number(value);
+  if (!Number.isFinite(n) || n < 0) return undefined;
+  return Math.floor(n);
+}
+
+/** Map a non-2xx response to a thrown ApiError. The backend uses two
+ * shapes:
+ *  - envelope: { data: ..., error: { code, message } } (the standard path)
+ *  - http-exception: { detail: "..." } (FastAPI's HTTPException default)
+ * Both must surface as a real error to the caller — silently returning
+ * undefined on a 5xx would mask the real failure as "no data".
+ * Exported for unit testing. */
+export function httpResponseToError(
+  r: Response,
+  body:
+    | { error?: { code: string; message: string } | null; detail?: string }
+    | null,
+): ApiError {
+  const retry = parseRetryAfter(r.headers.get("Retry-After"));
+  // Prefer the envelope's `error` field if present
+  if (body && body.error) {
+    return new ApiError(
+      body.error.code,
+      `${body.error.code}: ${body.error.message}`,
+      body.error,
+      r.status,
+      retry,
+    );
+  }
+  // Fall back to FastAPI's HTTPException detail
+  const detail = body?.detail || r.statusText || `HTTP ${r.status}`;
+  return new ApiError(
+    `http_${r.status}`,
+    detail,
+    body ?? undefined,
+    r.status,
+    retry,
+  );
 }
 
 const BASE = "";
@@ -251,16 +300,23 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       // 204 / empty body — skip JSON parse to avoid `Unexpected end of JSON input`.
       if (r.status === 204 || r.headers.get("content-length") === "0") {
         if (!r.ok) {
-          throw new ApiError(`http_${r.status}`, `HTTP ${r.status}`);
+          throw httpResponseToError(r, null);
         }
         return null as T;
       }
       const body = (await r.json()) as ApiResponse<T>;
+      // Any non-2xx (including FastAPI HTTPException's {detail:"..."}
+      // shape) must surface as an error, not silently return undefined.
+      if (!r.ok) {
+        throw httpResponseToError(r, body);
+      }
       if (body.error) {
         throw new ApiError(
           body.error.code,
           `${body.error.code}: ${body.error.message}`,
           body.error,
+          r.status,
+          parseRetryAfter(r.headers.get("Retry-After")),
         );
       }
       return body.data as T;

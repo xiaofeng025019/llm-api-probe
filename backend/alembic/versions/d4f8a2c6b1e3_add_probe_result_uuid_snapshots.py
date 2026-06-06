@@ -17,6 +17,7 @@ Revises: c9a5e4d7b2f0
 Create Date: 2026-06-05 00:55:00.000000
 
 """
+
 from typing import Sequence, Union
 
 import sqlalchemy as sa
@@ -34,12 +35,8 @@ def upgrade() -> None:
     """Add UUID snapshot columns and backfill from existing FKs."""
     # 1. Add the two columns (nullable for the backfill step).
     with op.batch_alter_table("probe_results", schema=None) as batch_op:
-        batch_op.add_column(
-            sa.Column("provider_uuid_at_probe", sa.Uuid(), nullable=True)
-        )
-        batch_op.add_column(
-            sa.Column("model_uuid_at_probe", sa.Uuid(), nullable=True)
-        )
+        batch_op.add_column(sa.Column("provider_uuid_at_probe", sa.Uuid(), nullable=True))
+        batch_op.add_column(sa.Column("model_uuid_at_probe", sa.Uuid(), nullable=True))
 
     # 2. Backfill from live FKs.
     # Every probe_result has a provider_id, so provider_uuid_at_probe

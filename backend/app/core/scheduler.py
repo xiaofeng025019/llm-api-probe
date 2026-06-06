@@ -17,6 +17,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 from sqlalchemy import exc as sa_exc
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.core.http import get_client
@@ -25,6 +26,7 @@ from app.db.models import (
     JobState,
     Model,
     ModelType,
+    ProbeResult,
     ProbeTarget,
     Provider,
 )
@@ -255,17 +257,21 @@ def _idle_multiplier() -> int:
 def _effective_interval(model_uuid: uuid.UUID, base_interval: int) -> int:
     """Compute the next-probe gap for a chat-completion model in seconds."""
     backoff = (
-        _backoff_multiplier(_model_success_streak.get(model_uuid, 0))
-        if _adaptive_backoff_enabled
-        else 1
+        _backoff_multiplier(_model_success_streak.get(model_uuid, 0)) if _adaptive_backoff_enabled else 1
     )
     return base_interval * backoff * _idle_multiplier()
 
 
 def _bump_streak(model_uuid: uuid.UUID, success: bool) -> None:
-    """Update success streak after a probe result. Snap to 0 on failure
-    (back to 1× base interval); +1 on success. Logs only on tier crossings
-    so probe logs don't get noisy."""
+    """Update success streak after a probe result.
+
+    On success: +1 (promote toward 8× cap when stable).
+    On failure: halve the streak (floor 0). Halving preserves
+    built-up trust — a model with a 25-probe streak earned that
+    headroom and one transient timeout shouldn't burn 25 successes.
+    Decay still happens fast enough for a real outage: 60→30→15→7→3→1→0
+    over six consecutive failures lands the model back at 1×.
+    """
     if success:
         prev = _model_success_streak.get(model_uuid, 0)
         new = prev + 1
@@ -279,12 +285,19 @@ def _bump_streak(model_uuid: uuid.UUID, success: bool) -> None:
                 _backoff_multiplier(new),
             )
     else:
-        prev = _model_success_streak.pop(model_uuid, 0)
-        if _backoff_multiplier(prev) != 1:
+        prev = _model_success_streak.get(model_uuid, 0)
+        new = prev // 2
+        if new <= 0:
+            _model_success_streak.pop(model_uuid, None)
+        else:
+            _model_success_streak[model_uuid] = new
+        if _backoff_multiplier(prev) != _backoff_multiplier(new):
             log.debug(
-                "backoff reset on failure: model=%s streak=%d→0 mult→1x",
+                "backoff tier down: model=%s streak=%d→%d mult=%dx",
                 model_uuid,
                 prev,
+                new,
+                _backoff_multiplier(new),
             )
 
 
@@ -317,10 +330,36 @@ def _on_sse_wake() -> None:
 
     async def _do_wake() -> None:
         try:
-            scheduled, skipped = await trigger_all_models_now()
-            log.info(
-                "sse wake sweep: scheduled=%d skipped=%d", scheduled, skipped
-            )
+            sm = get_session_maker()
+            async with sm() as session:
+                providers = list(
+                    (
+                        await session.execute(
+                            select(Provider).where(
+                                Provider.deleted_at.is_(None),
+                                Provider.enabled.is_(True),
+                            )
+                        )
+                    )
+                    .scalars()
+                    .all()
+                )
+            scheduled = 0
+            skipped = 0
+            for p in providers:
+                result = await enqueue_trigger(
+                    p.uuid_id,
+                    None,
+                    ProbeTarget.list_models,
+                    priority=TriggerPriority.SWEEP,
+                    source="sse_wake",
+                    session_maker=sm,
+                )
+                if result == EnqueueResult.ENQUEUED:
+                    scheduled += 1
+                else:
+                    skipped += 1
+            log.info("sse wake sweep: enqueued=%d skipped=%d", scheduled, skipped)
         except Exception:
             log.exception("sse wake sweep failed")
 
@@ -391,18 +430,14 @@ async def _resolve_probe_target(
     when the probe should be skipped (provider disabled / missing,
     model disabled / wrong type, etc.).
     """
-    result = await session.execute(
-        select(Provider).where(uuid_equals(Provider.uuid_id, provider_uuid))
-    )
+    result = await session.execute(select(Provider).where(uuid_equals(Provider.uuid_id, provider_uuid)))
     provider = result.scalar_one_or_none()
     if provider is None or not provider.enabled:
         return None, None, None
 
     model: Model | None = None
     if model_uuid:
-        model_result = await session.execute(
-            select(Model).where(uuid_equals(Model.uuid_id, model_uuid))
-        )
+        model_result = await session.execute(select(Model).where(uuid_equals(Model.uuid_id, model_uuid)))
         model = model_result.scalar_one_or_none()
 
     if target == ProbeTarget.chat_completion:
@@ -414,7 +449,7 @@ async def _resolve_probe_target(
         if model.type not in (ModelType.chat, ModelType.vision):
             return None, None, None
         return provider, model, model.model_id
-    return provider, model, None  # type: ignore[return-value]
+    return provider, model, None
 
 
 async def _execute_probe(
@@ -445,6 +480,11 @@ async def _execute_probe(
                 timeout=probe_timeout_s,
             )
         else:
+            # By construction, when target == chat_completion the resolver
+            # ensured model_id_str is set (see _resolve_probe_target).
+            # Assert it explicitly so mypy can narrow and so a future
+            # refactor that breaks this invariant fails loudly.
+            assert model_id_str is not None, "chat_completion requires a model_id_str"
             outcome = await asyncio.wait_for(
                 prober.probe_chat(
                     provider,
@@ -455,7 +495,7 @@ async def _execute_probe(
                 ),
                 timeout=probe_timeout_s,
             )
-    except (asyncio.TimeoutError, Exception) as e:
+    except (TimeoutError, Exception) as e:
         log.exception("probe task crashed: %s", e)
         return await results_svc.record_outcome(
             session,
@@ -464,9 +504,7 @@ async def _execute_probe(
             target,
             _outcome_from_exception(e),
         )
-    row = await results_svc.record_outcome(
-        session, provider, model.id if model else None, target, outcome
-    )
+    row = await results_svc.record_outcome(session, provider, model.id if model else None, target, outcome)
     # On successful list_models, upsert discovered models
     if target == ProbeTarget.list_models and outcome.success and outcome.models:
         await upsert_discovered(session, provider.uuid_id, outcome.models)
@@ -497,9 +535,7 @@ async def _execute_probe(
                 "model_name": model.model_id if model else None,
                 "model_is_favorite": True,
                 "error_code": row.error_code.value if row.error_code else None,
-                "message": row.error_message or row.error_code.value
-                if row.error_code
-                else "fail",
+                "message": row.error_message or row.error_code.value if row.error_code else "fail",
             },
         )
     return row
@@ -644,9 +680,7 @@ async def _run_probe(
 
                 # 3. Execute the prober call (with hard timeout), record
                 #    the outcome, broadcast SSE events.
-                row = await _execute_probe(
-                    session, provider, model, model_id_str, target
-                )
+                row = await _execute_probe(session, provider, model, model_id_str, target)
 
                 # 3a. If the upstream told us to back off (HTTP 429),
                 #     set a per-provider cooldown so the next
@@ -660,9 +694,7 @@ async def _run_probe(
                     )
 
                 # 4. Post-probe admin: JobState, streak + reschedule.
-                await _post_probe_admin(
-                    session, provider, model, model_uuid, target, row
-                )
+                await _post_probe_admin(session, provider, model, model_uuid, target, row)
     except (sa_exc.SQLAlchemyError, asyncio.CancelledError) as e:
         log.exception("probe run outer failure: %s", e)
 
@@ -771,8 +803,12 @@ def _upsert_job(
     # them out and short enough that dashboards stay accurate.
     jitter = max(5, interval // 10)
     trigger = IntervalTrigger(seconds=interval, jitter=jitter)
+    # The periodic callback is the enqueue point, not the probe
+    # itself. The worker pool drains the queue and runs the
+    # actual `_run_probe`. This is what lets the queue dedupe,
+    # prioritize, and back-pressure triggers from all sources.
     sched.add_job(
-        _run_probe,
+        _periodic_enqueue_callback,
         trigger=trigger,
         args=[provider_uuid, model_uuid, target],
         id=job_id,
@@ -828,9 +864,7 @@ async def sync_all_jobs() -> None:
     # — the UUIDs change in the soft-delete case but the old semaphores
     # would otherwise stick around forever.
     provider_rows = (
-        await session.execute(
-            select(Provider.uuid_id).where(Provider.deleted_at.is_(None))
-        )
+        await session.execute(select(Provider.uuid_id).where(Provider.deleted_at.is_(None)))
     ).all()
     live_provider_uuids = {r[0] for r in provider_rows}
     for stale in [u for u in list(_provider_sems.keys()) if u not in live_provider_uuids]:
@@ -839,52 +873,41 @@ async def sync_all_jobs() -> None:
         _provider_rate_buckets.pop(stale, None)
 
 
-async def trigger_now(provider_uuid: uuid.UUID, model_uuid: uuid.UUID | None, session_maker=None) -> bool:
-    """Run a probe right now. Returns True if a probe was actually scheduled,
-    False if the provider/model is disabled (in which case the caller's API
-    endpoint should surface a 409 instead of pretending to schedule)."""
-    sm = session_maker or get_session_maker()
-    sched = get_scheduler()
+async def trigger_now(
+    provider_uuid: uuid.UUID,
+    model_uuid: uuid.UUID | None,
+    session_maker=None,
+) -> EnqueueResult:
+    """Enqueue a MANUAL trigger for one (provider, model, target).
+
+    The enabled/deleted check happens inside `enqueue_trigger` so
+    disabled targets return DEDUPED (caller maps to 404/409). On
+    success the worker pool will pick it up and run the probe.
+    """
     target = ProbeTarget.list_models if model_uuid is None else ProbeTarget.chat_completion
-
-    async with sm() as session:
-        # Look up provider by UUID
-        result = await session.execute(select(Provider).where(uuid_equals(Provider.uuid_id, provider_uuid)))
-        provider = result.scalar_one_or_none()
-        if provider is None or not provider.enabled:
-            return False
-        if target == ProbeTarget.chat_completion:
-            if model_uuid:
-                result = await session.execute(select(Model).where(uuid_equals(Model.uuid_id, model_uuid)))
-                model = result.scalar_one_or_none()
-            else:
-                model = None
-            if model is None or not model.enabled:
-                return False
-
-    job_id = _make_job_id(provider_uuid, model_uuid, target)
-    try:
-        sched.modify_job(job_id, next_run_time=datetime.now(UTC))
-        return True
-    except Exception:
-        # Job doesn't exist yet (e.g. before any sync_all_jobs). Run inline.
-        _background_tasks.add(asyncio.create_task(_run_probe(provider_uuid, model_uuid, target)))
-        return True
+    return await enqueue_trigger(
+        provider_uuid,
+        model_uuid,
+        target,
+        priority=TriggerPriority.MANUAL,
+        source="manual",
+        session_maker=session_maker,
+    )
 
 
 async def trigger_provider_now(provider_uuid: uuid.UUID, session_maker=None) -> tuple[int, int]:
-    """Schedule status probes for one enabled provider's probeable models.
+    """Enqueue MANUAL triggers for one provider's enabled chat models.
 
-    This is intentionally separate from the model-list refresh path:
-    `/sync-models` calls upstream list_models and updates the model catalog,
-    while this function checks availability/latency for current models.
+    Returns (scheduled, skipped) where `skipped` is the count of
+    models that the enabled/deleted check rejected (DEDUPED).
     """
     sm = session_maker or get_session_maker()
     scheduled = 0
     skipped = 0
     async with sm() as session:
-        result = await session.execute(select(Provider).where(uuid_equals(Provider.uuid_id, provider_uuid)))
-        provider = result.scalar_one_or_none()
+        provider = (
+            await session.execute(select(Provider).where(uuid_equals(Provider.uuid_id, provider_uuid)))
+        ).scalar_one_or_none()
         if provider is None or not provider.enabled:
             return 0, 1
         models = list(
@@ -902,7 +925,8 @@ async def trigger_provider_now(provider_uuid: uuid.UUID, session_maker=None) -> 
             .all()
         )
     for model in models:
-        if await trigger_now(provider_uuid, model.uuid_id, session_maker=sm):
+        result = await trigger_now(provider_uuid, model.uuid_id, session_maker=sm)
+        if result == EnqueueResult.ENQUEUED:
             scheduled += 1
         else:
             skipped += 1
@@ -912,40 +936,192 @@ async def trigger_provider_now(provider_uuid: uuid.UUID, session_maker=None) -> 
 async def trigger_all_models_now(
     session_maker=None,
 ) -> tuple[int, int]:
-    """Schedule status checks for every enabled provider's probeable models.
+    """Enqueue MANUAL triggers for every enabled provider's models.
 
-    Returns (scheduled, skipped):
-    - scheduled: number of model status checks that were actually enqueued
-    - skipped: number of disabled/unavailable targets skipped
-      (provider disabled, model disabled, model soft-deleted, etc.)
-
-    Used by the dashboard "Check all model status" button, so the user
-    sees fresh availability numbers instead
-    of a stale snapshot from whenever the periodic scheduler last ran.
-
-    Concurrency: rely on APScheduler's max_instances=1 + coalesce=True
-    on each job to merge rapid duplicate triggers into a single run.
-    Calling this 3 times in a row from 3 browser tabs won't queue 3
-    probe runs per model — it queues at most 1.
+    Returns (scheduled, skipped). The queue's dedup logic means
+    multiple rapid calls (e.g. user clicking "Refresh all" 3 times)
+    coalesce into a single enqueue per (provider, model, target).
     """
     sm = session_maker or get_session_maker()
     scheduled = 0
     skipped = 0
     async with sm() as session:
         providers = list(
-            (await session.execute(
-                select(Provider).where(Provider.deleted_at.is_(None), Provider.enabled.is_(True))
-            )).scalars().all()
+            (
+                await session.execute(
+                    select(Provider).where(Provider.deleted_at.is_(None), Provider.enabled.is_(True))
+                )
+            )
+            .scalars()
+            .all()
         )
-        for p in providers:
-            provider_scheduled, provider_skipped = await trigger_provider_now(p.uuid_id, session_maker=sm)
-            scheduled += provider_scheduled
-            skipped += provider_skipped
+    for p in providers:
+        s, k = await trigger_provider_now(p.uuid_id, session_maker=sm)
+        scheduled += s
+        skipped += k
     return scheduled, skipped
 
 
 # set of in-flight probe tasks created by trigger_now; lets asyncio.discard them.
 _background_tasks: set[asyncio.Task[None]] = set()
+
+
+# ---------- unified trigger queue -------------------------------------------
+#
+# The 4 trigger sources (periodic, sweep, SSE wake, manual) all
+# submit to a single priority queue. A worker pool drains it. This
+# replaces the old `modify_job(next_run_time=now)` pattern, which
+# couldn't dedupe, prioritize, or surface a "queue full" condition.
+# See `app/core/trigger_queue.py` for the contract.
+
+from app.core.trigger_queue import (  # noqa: E402  (import after module globals for clarity)
+    EnqueueResult,
+    TriggerPriority,
+    TriggerRequest,
+    get_trigger_queue,
+)
+
+
+async def enqueue_trigger(
+    provider_uuid: uuid.UUID,
+    model_uuid: uuid.UUID | None,
+    target: ProbeTarget,
+    *,
+    priority: TriggerPriority,
+    source: str,
+    session_maker=None,
+) -> EnqueueResult:
+    """Async version. For MANUAL this does the enabled check first
+    so the API can return 404/409 immediately; for other priorities
+    the worker does the check on dequeue.
+    """
+    sm = session_maker or get_session_maker()
+    queue = get_trigger_queue()
+    if priority == TriggerPriority.MANUAL:
+        async with sm() as session:
+            provider = (
+                await session.execute(select(Provider).where(uuid_equals(Provider.uuid_id, provider_uuid)))
+            ).scalar_one_or_none()
+            if provider is None or not provider.enabled:
+                return EnqueueResult.DEDUPED  # 404 path will handle
+            if model_uuid is not None:
+                model = (
+                    await session.execute(select(Model).where(uuid_equals(Model.uuid_id, model_uuid)))
+                ).scalar_one_or_none()
+                if model is None or not model.enabled:
+                    return EnqueueResult.DEDUPED
+    req = TriggerRequest(
+        provider_uuid=provider_uuid,
+        model_uuid=model_uuid,
+        target=target,
+        priority=priority,
+        source=source,
+        requested_at=time.monotonic(),
+    )
+    return await queue.enqueue(req)
+
+
+# ---------- periodic callback (the APScheduler target) --------------------
+
+
+async def _periodic_enqueue_callback(
+    provider_uuid: uuid.UUID,
+    model_uuid: uuid.UUID | None,
+    target: ProbeTarget,
+) -> None:
+    """The function APScheduler's IntervalTrigger actually invokes.
+
+    It just submits to the trigger queue with PERIODIC priority.
+    The worker pool does the rest (cooldown, rate limit, probe,
+    reschedule). Returning immediately keeps APScheduler's
+    `max_instances=1` guarantee — if a tick is slow, the next
+    tick is coalesced.
+    """
+    await enqueue_trigger(
+        provider_uuid,
+        model_uuid,
+        target,
+        priority=TriggerPriority.PERIODIC,
+        source="periodic",
+    )
+
+
+# ---------- worker pool ----------------------------------------------------
+
+_worker_tasks: set[asyncio.Task[None]] = set()
+_shutdown_event = asyncio.Event()
+
+
+async def _worker_loop(worker_id: int) -> None:
+    """Drain the trigger queue and run probes. The per-provider
+    semaphore (1) and root semaphore (max_concurrency) are the
+    actual concurrency gates; the worker count is just the pool
+    size so we can have up to N probes in flight across N
+    different providers.
+    """
+    queue = get_trigger_queue()
+    log.info("trigger worker %d started", worker_id)
+    while not _shutdown_event.is_set():
+        req = await queue.dequeue()
+        if _shutdown_event.is_set():
+            # Re-queue so we don't lose MANUAL triggers on shutdown
+            await queue.enqueue(req)
+            break
+        queue.mark_in_flight(req)
+        try:
+            await _run_probe(req.provider_uuid, req.model_uuid, req.target)
+        except Exception:
+            log.exception("worker %d probe crashed: %s", worker_id, req)
+        finally:
+            queue.mark_done(req)
+    log.info("trigger worker %d stopped", worker_id)
+
+
+async def start_workers(n: int) -> None:
+    """Launch N trigger-queue workers. Called from the lifespan
+    handler in main.py at app startup.
+
+    Clamps ``n`` to ``max(1, n)`` with a warning when the caller
+    passes 0 or a negative value. The motivation: a misconfigured
+    .env (MAX_CONCURRENCY=0) used to silently disable the entire
+    monitoring pipeline — periodic enqueues filled the queue to
+    1000 and the user saw no probes ever run, with no startup
+    error. Clamping to 1 means a bad env shows up as "slow" rather
+    than "completely dead", and the warning lands in the log.
+    """
+    global _shutdown_event
+    if n < 1:
+        log.warning(
+            "start_workers called with n=%d (<1); clamping to 1 worker. "
+            "Set MAX_CONCURRENCY to a positive integer in .env.",
+            n,
+        )
+        n = 1
+    _shutdown_event = asyncio.Event()
+    for i in range(n):
+        t = asyncio.create_task(_worker_loop(i))
+        _worker_tasks.add(t)
+        t.add_done_callback(_worker_tasks.discard)
+
+
+async def stop_workers(timeout: float = 30.0) -> None:
+    """Signal workers to stop and wait for current probes to drain.
+    Bounded by `timeout` so a hung probe can't block shutdown
+    past the time we promised.
+    """
+    get_trigger_queue().close()
+    _shutdown_event.set()
+    if not _worker_tasks:
+        return
+    try:
+        await asyncio.wait_for(
+            asyncio.gather(*_worker_tasks, return_exceptions=True),
+            timeout=timeout,
+        )
+    except TimeoutError:
+        log.warning("workers did not drain within %.1fs; cancelling", timeout)
+        for t in _worker_tasks:
+            t.cancel()
 
 
 # ---------- random continuous probes ----------------------------------------
@@ -1048,10 +1224,18 @@ async def _random_probe_sweep() -> None:
     sample_size = min(sample_size, fleet)
     chosen = random.sample(candidates, sample_size)
     for provider_uuid, model_uuid in chosen:
-        # trigger_now does its own enabled/deleted checks. If a
-        # model was disabled between the SELECT and the call, it
-        # just returns False and we move on.
-        await trigger_now(provider_uuid, model_uuid, session_maker=sm)
+        # Enqueue at SWEEP priority. The queue's dedup logic means
+        # if a periodic or another sweep is already pending for the
+        # same key, this is dropped. If a probe is in-flight,
+        # SWEEP is also dropped (the in-flight satisfies).
+        await enqueue_trigger(
+            provider_uuid,
+            model_uuid,
+            ProbeTarget.chat_completion,
+            priority=TriggerPriority.SWEEP,
+            source="random_sweep",
+            session_maker=sm,
+        )
 
 
 def _ensure_random_sweep_job(sched: AsyncIOScheduler) -> None:

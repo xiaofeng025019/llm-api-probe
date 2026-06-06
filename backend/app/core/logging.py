@@ -34,7 +34,9 @@ Design points:
 from __future__ import annotations
 
 import logging
+import os
 import sys
+import types
 
 from loguru import logger
 
@@ -46,7 +48,7 @@ _configured = False
 class InterceptHandler(logging.Handler):
     """Bridge: stdlib ``logging`` records → loguru."""
 
-    def emit(self, record: logging.LogRecord) -> None:  # type: ignore[override]
+    def emit(self, record: logging.LogRecord) -> None:
         # Find loguru level matching the stdlib level name; fall back
         # to the numeric level if loguru doesn't know it.
         try:
@@ -66,10 +68,9 @@ class InterceptHandler(logging.Handler):
         #
         # The first frame we DON'T want to skip is the user code that
         # called ``logger.info(...)`` or ``log.exception(...)``.
-        import os
-
         logging_dir = os.path.dirname(logging.__file__)
         this_file = os.path.abspath(__file__)
+        frame: types.FrameType | None
         frame, depth = logging.currentframe(), 2
         while frame is not None:
             fname = os.path.abspath(frame.f_code.co_filename)
@@ -79,9 +80,7 @@ class InterceptHandler(logging.Handler):
                 continue
             break
 
-        logger.opt(depth=depth, exception=record.exc_info).log(
-            level, record.getMessage()
-        )
+        logger.opt(depth=depth, exception=record.exc_info).log(level, record.getMessage())
 
 
 def configure_logging() -> None:
@@ -128,12 +127,16 @@ def configure_logging() -> None:
             level=level,
             rotation="10 MB",
             retention=5,
-            compression=None,  # spec says 10MB×5 rotate, not 5 gz
-            format=(
-                "{time:YYYY-MM-DD HH:mm:ss.SSS} "
-                "{level: <8} "
-                "{name}:{function}:{line} - {message}"
-            ),
+            # Plain rotation alone leaves multi-MB rotated files
+            # lying around. We observed 3.5 MB in 9 hours under a
+            # probe-failure storm — and the original 10 MB already
+            # lives in the same dir. ``zip`` keeps the on-disk
+            # footprint bounded at the cost of one extra CPU
+            # pass per rotation, which is fine: log rotation
+            # happens once per ~10 MB written, not on the hot
+            # probe path.
+            compression="zip",
+            format=("{time:YYYY-MM-DD HH:mm:ss.SSS} {level: <8} {name}:{function}:{line} - {message}"),
             enqueue=True,
             backtrace=False,
             diagnose=False,

@@ -82,9 +82,7 @@ async def patch(
             raise HTTPException(status_code=404, detail="provider not found")
         new_base_url = body.base_url if body.base_url is not None else current.base_url
         new_api_key = body.api_key if body.api_key is not None else current.api_key
-        dup = await providers_svc.find_duplicate(
-            session, new_base_url, new_api_key, exclude_uuid=provider_id
-        )
+        dup = await providers_svc.find_duplicate(session, new_base_url, new_api_key, exclude_uuid=provider_id)
         if dup is not None:
             raise HTTPException(
                 status_code=409,

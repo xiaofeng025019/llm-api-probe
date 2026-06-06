@@ -66,6 +66,21 @@ def test_random_sweep_is_a_supplement_not_a_replacement():
     )
 
 
+def test_default_timeout_is_at_least_sixty_seconds():
+    """A 30s timeout was too aggressive for streaming models that
+    legitimately take 10-40s to produce the first token (TTFB).
+    With a 30s timeout, 80% of probes against the 咸鱼-MiniMax proxy
+    timed out (3764/4678 in 35h), most of which would have succeeded
+    with a 60s timeout. The upper bound in settings validation is
+    600s, so 60s is still conservative.
+    """
+    from app.core.config import get_settings
+
+    assert get_settings().default_timeout_seconds == 60, (
+        f"expected 60s default, got {get_settings().default_timeout_seconds}s"
+    )
+
+
 def test_default_rate_limit_does_not_starve_normal_load():
     """A typical deployment (N models split across providers) plus
     random-sweep + favorites must not constantly hit the
@@ -93,14 +108,12 @@ def test_default_rate_limit_does_not_starve_normal_load():
     reg_per_provider = models_per_provider - fav_per_provider
 
     # Probes per minute per provider from natural schedule alone.
-    natural_probes_per_min = (
-        fav_per_provider * (60 / DEFAULT_FAVORITE_MODEL_INTERVAL_SECONDS)
-        + reg_per_provider * (60 / DEFAULT_REGULAR_MODEL_INTERVAL_SECONDS)
-    )
+    natural_probes_per_min = fav_per_provider * (
+        60 / DEFAULT_FAVORITE_MODEL_INTERVAL_SECONDS
+    ) + reg_per_provider * (60 / DEFAULT_REGULAR_MODEL_INTERVAL_SECONDS)
     # Plus contribution from random sweep (proportional to models).
     sweep_probes_per_min = (
-        RANDOM_SWEEP_PROBES_PER_TICK * (60 / RANDOM_SWEEP_INTERVAL_SECONDS)
-        * (models_per_provider / 50)
+        RANDOM_SWEEP_PROBES_PER_TICK * (60 / RANDOM_SWEEP_INTERVAL_SECONDS) * (models_per_provider / 50)
     )
 
     worst_case = natural_probes_per_min + sweep_probes_per_min

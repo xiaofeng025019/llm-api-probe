@@ -6,10 +6,11 @@ Uses a sync engine (Alembic's standard mode) because:
   * The async template forces aiosqlite, but Alembic's own runtime
     and CLI tooling don't need it.
 """
+
 from __future__ import annotations
 
-from logging.config import fileConfig
 import sys
+from logging.config import fileConfig
 from pathlib import Path
 
 from sqlalchemy import engine_from_config, pool
@@ -19,8 +20,8 @@ from alembic import context
 # Make `app.*` importable regardless of CWD.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from app.core.config import get_settings  # noqa: E402
-from app.db.session import Base  # noqa: E402  (registers all models on Base.metadata)
+from app.core.config import get_settings
+from app.db.session import Base
 
 config = context.config
 

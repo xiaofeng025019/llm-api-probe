@@ -76,19 +76,13 @@ async def test_find_duplicate_detects_same_base_url_and_key(session) -> None:
     assert dup.uuid_id == p1.uuid_id
 
     # Same base_url, different key → NOT duplicate (multi-account)
-    assert (
-        await providers_svc.find_duplicate(session, "https://api.openai.com", "sk-bbb")
-    ) is None
+    assert (await providers_svc.find_duplicate(session, "https://api.openai.com", "sk-bbb")) is None
 
     # Different base_url, same key → NOT duplicate
-    assert (
-        await providers_svc.find_duplicate(session, "https://other.example.com", "sk-aaa")
-    ) is None
+    assert (await providers_svc.find_duplicate(session, "https://other.example.com", "sk-aaa")) is None
 
     # No api_key → never duplicate (caller decides what to do with secrets-less rows)
-    assert (
-        await providers_svc.find_duplicate(session, "https://api.openai.com", None)
-    ) is None
+    assert (await providers_svc.find_duplicate(session, "https://api.openai.com", None)) is None
 
     # exclude_uuid lets the caller exclude the row being patched
     assert (
@@ -245,7 +239,10 @@ async def test_record_outcome_populates_provider_uuid_snapshot(session) -> None:
         ),
     )
     out = await results_svc.record_outcome(
-        session, p, None, ProbeTarget.list_models,
+        session,
+        p,
+        None,
+        ProbeTarget.list_models,
         ProbeOutcome(success=True, http_status=200, latency_ms=42),
     )
     assert out.provider_uuid_at_probe == p.uuid_id
@@ -270,7 +267,10 @@ async def test_record_outcome_populates_model_uuid_snapshot(session) -> None:
     )
     model = ms[0]
     out = await results_svc.record_outcome(
-        session, p, model.id, ProbeTarget.chat_completion,
+        session,
+        p,
+        model.id,
+        ProbeTarget.chat_completion,
         ProbeOutcome(success=True, http_status=200, latency_ms=100),
     )
     assert out.model_uuid_at_probe == model.uuid_id
@@ -290,7 +290,10 @@ async def test_record_outcome_model_uuid_is_null_for_list_models(session) -> Non
         ),
     )
     out = await results_svc.record_outcome(
-        session, p, None, ProbeTarget.list_models,
+        session,
+        p,
+        None,
+        ProbeTarget.list_models,
         ProbeOutcome(success=True, http_status=200, latency_ms=42),
     )
     assert out.model_uuid_at_probe is None
@@ -311,7 +314,10 @@ async def test_snapshot_uuid_survives_provider_rename(session) -> None:
         ),
     )
     out = await results_svc.record_outcome(
-        session, p, None, ProbeTarget.list_models,
+        session,
+        p,
+        None,
+        ProbeTarget.list_models,
         ProbeOutcome(success=True, http_status=200, latency_ms=42),
     )
     # Now rename the provider
@@ -337,7 +343,10 @@ async def test_find_provider_by_uuid_resolves_snapshot(session) -> None:
         ),
     )
     out = await results_svc.record_outcome(
-        session, p, None, ProbeTarget.list_models,
+        session,
+        p,
+        None,
+        ProbeTarget.list_models,
         ProbeOutcome(success=True, http_status=200, latency_ms=42),
     )
 
@@ -372,7 +381,10 @@ async def test_find_model_by_uuid_resolves_snapshot(session) -> None:
     )
     model = ms[0]
     out = await results_svc.record_outcome(
-        session, p, model.id, ProbeTarget.chat_completion,
+        session,
+        p,
+        model.id,
+        ProbeTarget.chat_completion,
         ProbeOutcome(success=True, http_status=200, latency_ms=100),
     )
 
@@ -391,6 +403,7 @@ async def test_snapshot_persists_through_soft_delete_and_restore(session) -> Non
     soft-deleted, then re-appears (typical case: model re-offered by
     upstream after being removed for a while)."""
     from sqlalchemy import select
+
     p = await providers_svc.create_provider(
         session,
         ProviderCreate(
@@ -405,7 +418,10 @@ async def test_snapshot_persists_through_soft_delete_and_restore(session) -> Non
     )
     model = ms[0]
     out = await results_svc.record_outcome(
-        session, p, model.id, ProbeTarget.chat_completion,
+        session,
+        p,
+        model.id,
+        ProbeTarget.chat_completion,
         ProbeOutcome(success=True, http_status=200, latency_ms=100),
     )
     # Soft-delete the model (out of provider's offering for a while)
@@ -933,28 +949,13 @@ async def test_get_int_setting_clamps_to_maximum(session) -> None:
     out-of-range values down to the ceiling, not just the floor."""
     # Above the max → clamped to max
     await settings_svc.upsert_settings(session, {"too_high": "5000"})
-    assert (
-        await settings_svc.get_int_setting(
-            session, "too_high", 300, minimum=1, maximum=100
-        )
-        == 100
-    )
+    assert await settings_svc.get_int_setting(session, "too_high", 300, minimum=1, maximum=100) == 100
     # In range → unchanged
     await settings_svc.upsert_settings(session, {"just_right": "42"})
-    assert (
-        await settings_svc.get_int_setting(
-            session, "just_right", 300, minimum=1, maximum=100
-        )
-        == 42
-    )
+    assert await settings_svc.get_int_setting(session, "just_right", 300, minimum=1, maximum=100) == 42
     # Below the min → clamped to min (still applies)
     await settings_svc.upsert_settings(session, {"too_low": "0"})
-    assert (
-        await settings_svc.get_int_setting(
-            session, "too_low", 300, minimum=1, maximum=100
-        )
-        == 1
-    )
+    assert await settings_svc.get_int_setting(session, "too_low", 300, minimum=1, maximum=100) == 1
 
 
 @pytest.mark.asyncio
@@ -984,6 +985,7 @@ async def test_provider_health_status_never_probed_yields_none_not_degraded(sess
     # Now repeat with a successful list_models probe — still must not be degraded
     class _FakeResult:
         success = True
+
     fake = _FakeResult()
     status_with_list = _provider_health_status(
         provider_enabled=True,
@@ -991,9 +993,7 @@ async def test_provider_health_status_never_probed_yields_none_not_degraded(sess
         enabled_model_ids=[1, 2, 3],
         recent_per_model={},
     )
-    assert status_with_list is None, (
-        f"expected None (no signal yet), got {status_with_list!r}"
-    )
+    assert status_with_list is None, f"expected None (no signal yet), got {status_with_list!r}"
 
 
 @pytest.mark.asyncio
@@ -1045,11 +1045,17 @@ async def test_pin_unpin_probe_result(session) -> None:
         ),
     )
     failed = await results_svc.record_outcome(
-        session, p, None, ProbeTarget.list_models,
+        session,
+        p,
+        None,
+        ProbeTarget.list_models,
         ProbeOutcome(success=False, http_status=500, error_code=ErrorCode.server),
     )
     successful = await results_svc.record_outcome(
-        session, p, None, ProbeTarget.list_models,
+        session,
+        p,
+        None,
+        ProbeTarget.list_models,
         ProbeOutcome(success=True, http_status=200, latency_ms=42),
     )
     # Pinning a failure works
@@ -1061,9 +1067,9 @@ async def test_pin_unpin_probe_result(session) -> None:
     # Unpinning the pinned row works
     assert await results_svc.unpin_probe_result(session, failed.uuid_id) is True
     # Verify the row's pinned column is now False
-    rows = (await session.execute(
-        ProbeResult.__table__.select().where(ProbeResult.uuid_id == failed.uuid_id)
-    )).all()
+    rows = (
+        await session.execute(ProbeResult.__table__.select().where(ProbeResult.uuid_id == failed.uuid_id))
+    ).all()
     assert rows[0].pinned == 0
 
 
@@ -1081,15 +1087,24 @@ async def test_list_recent_errors_pinned_first(session) -> None:
     )
     # Three failures
     a = await results_svc.record_outcome(
-        session, p, None, ProbeTarget.list_models,
+        session,
+        p,
+        None,
+        ProbeTarget.list_models,
         ProbeOutcome(success=False, http_status=500, error_code=ErrorCode.server),
     )
     b = await results_svc.record_outcome(
-        session, p, None, ProbeTarget.list_models,
+        session,
+        p,
+        None,
+        ProbeTarget.list_models,
         ProbeOutcome(success=False, http_status=502, error_code=ErrorCode.server),
     )
     c = await results_svc.record_outcome(
-        session, p, None, ProbeTarget.list_models,
+        session,
+        p,
+        None,
+        ProbeTarget.list_models,
         ProbeOutcome(success=False, http_status=503, error_code=ErrorCode.server),
     )
     # Pin the OLDEST one (a) — it should still come first
@@ -1116,11 +1131,17 @@ async def test_error_history_filters_and_cleans_older_than_15_minutes(session) -
         ),
     )
     old = await results_svc.record_outcome(
-        session, p, None, ProbeTarget.list_models,
+        session,
+        p,
+        None,
+        ProbeTarget.list_models,
         ProbeOutcome(success=False, http_status=500, error_code=ErrorCode.server),
     )
     fresh = await results_svc.record_outcome(
-        session, p, None, ProbeTarget.list_models,
+        session,
+        p,
+        None,
+        ProbeTarget.list_models,
         ProbeOutcome(success=False, http_status=502, error_code=ErrorCode.server),
     )
 
@@ -1156,7 +1177,10 @@ async def test_error_history_keeps_at_most_100_failures(session) -> None:
     for i in range(101):
         rows.append(
             await results_svc.record_outcome(
-                session, p, None, ProbeTarget.list_models,
+                session,
+                p,
+                None,
+                ProbeTarget.list_models,
                 ProbeOutcome(success=False, http_status=500 + (i % 3), error_code=ErrorCode.server),
             )
         )
@@ -1173,6 +1197,7 @@ async def test_cleanup_old_skips_pinned(session) -> None:
     Otherwise the pin is meaningless — the user pinned something
     and it silently disappeared after `retention_days`."""
     from datetime import UTC, datetime, timedelta
+
     p = await providers_svc.create_provider(
         session,
         ProviderCreate(
@@ -1183,11 +1208,17 @@ async def test_cleanup_old_skips_pinned(session) -> None:
         ),
     )
     pinned = await results_svc.record_outcome(
-        session, p, None, ProbeTarget.list_models,
+        session,
+        p,
+        None,
+        ProbeTarget.list_models,
         ProbeOutcome(success=False, http_status=500, error_code=ErrorCode.server),
     )
     not_pinned = await results_svc.record_outcome(
-        session, p, None, ProbeTarget.list_models,
+        session,
+        p,
+        None,
+        ProbeTarget.list_models,
         ProbeOutcome(success=False, http_status=500, error_code=ErrorCode.server),
     )
     # Pin one of them
@@ -1196,14 +1227,10 @@ async def test_cleanup_old_skips_pinned(session) -> None:
     # Backdate BOTH rows to 100 days ago
     old = datetime.now(UTC).replace(tzinfo=None) - timedelta(days=100)
     await session.execute(
-        ProbeResult.__table__.update()
-        .where(ProbeResult.uuid_id == pinned.uuid_id)
-        .values(checked_at=old)
+        ProbeResult.__table__.update().where(ProbeResult.uuid_id == pinned.uuid_id).values(checked_at=old)
     )
     await session.execute(
-        ProbeResult.__table__.update()
-        .where(ProbeResult.uuid_id == not_pinned.uuid_id)
-        .values(checked_at=old)
+        ProbeResult.__table__.update().where(ProbeResult.uuid_id == not_pinned.uuid_id).values(checked_at=old)
     )
     await session.commit()
 
@@ -1213,10 +1240,12 @@ async def test_cleanup_old_skips_pinned(session) -> None:
     assert removed == 1, f"expected exactly 1 row deleted, got {removed}"
 
     # Verify: the pinned row is still there, the non-pinned one is gone
-    rows = (await session.execute(
-        ProbeResult.__table__.select().where(
-            ProbeResult.uuid_id.in_([pinned.uuid_id, not_pinned.uuid_id])
+    rows = (
+        await session.execute(
+            ProbeResult.__table__.select().where(
+                ProbeResult.uuid_id.in_([pinned.uuid_id, not_pinned.uuid_id])
+            )
         )
-    )).all()
+    ).all()
     assert len(rows) == 1
     assert rows[0].uuid_id == pinned.uuid_id

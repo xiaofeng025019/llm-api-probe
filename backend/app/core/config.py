@@ -72,7 +72,7 @@ class Settings(BaseSettings):
 
     log_level: str = "INFO"
     default_interval_seconds: int = 300
-    default_timeout_seconds: int = 30
+    default_timeout_seconds: int = 60
     max_concurrency: int = 10
     retention_days: int = 30
     probe_prompt: str = "hi"

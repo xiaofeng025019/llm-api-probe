@@ -114,6 +114,7 @@ class ModelCreate(BaseModel):
     (e.g. MiniMax) so the user can still register a model for probing.
     Field bounds match the underlying Model columns.
     """
+
     model_id: str = Field(min_length=1, max_length=300)
     display_name: str | None = Field(default=None, max_length=300)
     type: ModelType = ModelType.chat
@@ -255,6 +256,15 @@ class ImportPayload(BaseModel):
     # populate the `favorites` field instead. On import, both fields
     # are processed; the `favorites` field takes precedence.
     favorites_by_provider: dict[str, list[str]] = Field(default_factory=dict)
+    # New (preferred) format: per-provider list of model_ids the user
+    # has explicitly disabled (enabled=False). Import restores the
+    # disable state on the named provider's models. Same uuid-then-
+    # name lookup strategy as `favorites`; same dedup-by-provider rule.
+    models_disabled: list[FavoriteEntry] = Field(default_factory=list)
+    # Legacy format: { provider_name: [model_id, ...] } for disabled
+    # models. Kept for back-compat with older exports / hand-written
+    # payloads. On import, `models_disabled` takes precedence.
+    disabled_by_provider: dict[str, list[str]] = Field(default_factory=dict)
 
 
 class ExportPayload(BaseModel):
@@ -265,4 +275,10 @@ class ExportPayload(BaseModel):
     # Legacy format. Emitted alongside the new field for backward compat
     # with older importers. May be removed in a future major version.
     favorites_by_provider: dict[str, list[str]] = Field(default_factory=dict)
+    # New (preferred) format: per-provider list of model_ids the user
+    # has disabled. Mirrors the `favorites` field above; same contract.
+    models_disabled: list[FavoriteEntry] = Field(default_factory=list)
+    # Legacy format for disabled models. Same as favorites: kept for
+    # back-compat; may be removed in a future major version.
+    disabled_by_provider: dict[str, list[str]] = Field(default_factory=dict)
     settings: dict[str, str]

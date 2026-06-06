@@ -3,19 +3,14 @@
 from __future__ import annotations
 
 import json
-import time
 from typing import Any
 
 import httpx
 
 from app.db.models import ModelType, Provider
 from app.probers._streaming import stream_chat
-from app.probers.error_mapping import (
-    map_exception_to_error,
-    map_status_to_error,
-)
 from app.probers.model_classify import classify_model_id
-from app.probers.types import MAX_UPSTREAM_ERROR_BODY_CHARS, ProbeOutcome
+from app.probers.types import ProbeOutcome
 
 ANTHROPIC_DEFAULT_VERSION = "2023-06-01"
 

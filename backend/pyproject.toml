@@ -43,7 +43,21 @@ select = ["E", "F", "I", "N", "W", "UP", "B", "SIM", "RUF"]
 ignore = [
     "B008",  # FastAPI Depends() in default is idiomatic
     "UP042", # str-Enum hybrid is fine for our use
+    # Many docstrings and comments use CJK punctuation (— vs -, × vs x,
+    # full-width digits). These are intentional editorial choices, not
+    # bugs. The ambiguity flag is meant for code identifiers, not prose.
+    "RUF002",
+    "RUF003",
 ]
+
+[tool.ruff.lint.per-file-ignores]
+# Alembic auto-generates migration templates with the typing.Union /
+# typing.Sequence form (it's what the template renderer emits). Rewriting
+# these per migration buys nothing — they're a stable artifact, not
+# evolving code — and changing the templates is fragile. Suppress the
+# pep604/deprecated-import / import-order nits inside the versions dir
+# so `ruff check` is meaningful for app code.
+"alembic/versions/*" = ["UP007", "UP035", "I001", "E501"]
 
 [tool.mypy]
 python_version = "3.12"

@@ -14,14 +14,15 @@ handful of pre-existing drift (apscheduler_jobs table, probetarget
 enum cast, index name changes) that are unrelated to this fix and
 left out of this migration to keep the diff minimal.
 """
+
 from typing import Sequence, Union
 
 from alembic import op
 
 
 # revision identifiers, used by Alembic.
-revision: str = 'f6be65f28074'
-down_revision: Union[str, Sequence[str], None] = 'c4f7e1a9b3d2'
+revision: str = "f6be65f28074"
+down_revision: Union[str, Sequence[str], None] = "c4f7e1a9b3d2"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

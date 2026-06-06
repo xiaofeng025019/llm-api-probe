@@ -3,6 +3,7 @@
 Extracted from `app/api/v1/dashboard.py:import_` so the per-spec
 merge logic is unit-testable independent of the HTTP route.
 """
+
 from __future__ import annotations
 
 import uuid
@@ -59,9 +60,7 @@ async def apply_provider_import(
             "enabled": spec.enabled,
             "api_key": spec.api_key,
         }
-        await providers_svc.patch_provider(
-            session, existing_p.uuid_id, ProviderPatch(**patch_data)
-        )
+        await providers_svc.patch_provider(session, existing_p.uuid_id, ProviderPatch(**patch_data))
         return "updated"
 
     if deleted_p is not None:
@@ -95,9 +94,7 @@ async def apply_provider_import(
     return "created"
 
 
-async def apply_provider_specs(
-    session: AsyncSession, payload: ImportPayload
-) -> tuple[int, int]:
+async def apply_provider_specs(session: AsyncSession, payload: ImportPayload) -> tuple[int, int]:
     """Apply every provider spec in `payload.providers`. Returns
     (created_count, updated_count). Note: restored providers count
     under updated.
@@ -114,9 +111,7 @@ async def apply_provider_specs(
     created = 0
     updated = 0
     for spec in payload.providers:
-        outcome = await apply_provider_import(
-            session, spec, existing_active, existing_deleted, by_uuid
-        )
+        outcome = await apply_provider_import(session, spec, existing_active, existing_deleted, by_uuid)
         if outcome == "created":
             created += 1
         else:
@@ -125,9 +120,7 @@ async def apply_provider_specs(
     return created, updated
 
 
-async def apply_favorites_import(
-    session: AsyncSession, payload: ImportPayload
-) -> int:
+async def apply_favorites_import(session: AsyncSession, payload: ImportPayload) -> int:
     """Apply favorites entries from the import payload. Returns the
     total number of model rows that became favorites.
 
@@ -161,9 +154,7 @@ async def apply_favorites_import(
         if key in seen:
             continue
         seen.add(key)
-        total += await models_svc.set_favorites(
-            session, prov.uuid_id, entry.model_ids
-        )
+        total += await models_svc.set_favorites(session, prov.uuid_id, entry.model_ids)
 
     # 2. Legacy format for any provider not seen yet
     for prov_name, model_ids in payload.favorites_by_provider.items():
@@ -178,9 +169,55 @@ async def apply_favorites_import(
     return total
 
 
-async def apply_settings_import(
-    session: AsyncSession, payload: ImportPayload
-) -> None:
+async def apply_settings_import(session: AsyncSession, payload: ImportPayload) -> None:
     """Persist any `payload.settings` into the settings table."""
     if payload.settings:
         await settings_svc.upsert_settings(session, payload.settings)
+
+
+async def apply_disabled_import(session: AsyncSession, payload: ImportPayload) -> int:
+    """Apply per-model disable decisions from the import payload.
+
+    Mirrors ``apply_favorites_import``: each entry resolves to a
+    Provider (by uuid first, then by name), and the listed
+    ``model_ids`` get enabled=False on that provider's models. The
+    new ``models_disabled`` field takes precedence; the legacy
+    ``disabled_by_provider`` field is only processed for providers
+    not already covered by the rich format.
+
+    Returns the total number of model rows that ended up disabled.
+    """
+    if not (payload.models_disabled or payload.disabled_by_provider):
+        return 0
+    all_providers = await providers_svc.list_providers(session, include_deleted=True)
+    providers_by_uuid: dict[uuid.UUID, Provider] = {p.uuid_id: p for p in all_providers}
+    providers_by_name: dict[str, Provider] = {p.name: p for p in all_providers}
+    seen: set[tuple[str, str]] = set()
+    total = 0
+
+    # 1. New (rich) format first
+    for entry in payload.models_disabled:
+        prov: Provider | None = None
+        if entry.provider_uuid is not None and entry.provider_uuid in providers_by_uuid:
+            prov = providers_by_uuid[entry.provider_uuid]
+        elif entry.provider_name in providers_by_name:
+            prov = providers_by_name[entry.provider_name]
+        if prov is None:
+            continue
+        key = (str(prov.uuid_id), prov.name)
+        if key in seen:
+            continue
+        seen.add(key)
+        total += await models_svc.set_disabled(session, prov.uuid_id, entry.model_ids)
+
+    # 2. Legacy format for any provider not seen yet
+    for prov_name, model_ids in payload.disabled_by_provider.items():
+        prov = providers_by_name.get(prov_name)
+        if prov is None:
+            continue
+        key = (str(prov.uuid_id), prov.name)
+        if key in seen:
+            continue
+        seen.add(key)
+        total += await models_svc.set_disabled(session, prov.uuid_id, model_ids)
+    return total

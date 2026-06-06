@@ -6,7 +6,6 @@ import asyncio
 import json
 import uuid
 from datetime import UTC, datetime, timedelta
-from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -14,6 +13,7 @@ from sse_starlette.sse import EventSourceResponse
 
 from app.core.scheduler import sync_all_jobs, trigger_all_models_now, trigger_now, trigger_provider_now
 from app.core.sse import get_sse
+from app.core.trigger_queue import EnqueueResult
 from app.db.session import get_session
 from app.schemas.api import (
     ApiResponse,
@@ -22,7 +22,6 @@ from app.schemas.api import (
     FavoriteEntry,
     ImportPayload,
     ProbeResultOut,
-    ProviderPatch,
     SettingOut,
     SettingPut,
 )
@@ -81,6 +80,7 @@ async def import_(
     """
     created, updated = await import_export_svc.apply_provider_specs(session, body)
     favorites_restored = await import_export_svc.apply_favorites_import(session, body)
+    disabled_restored = await import_export_svc.apply_disabled_import(session, body)
     await import_export_svc.apply_settings_import(session, body)
     await sync_all_jobs()
     return ApiResponse(
@@ -88,6 +88,7 @@ async def import_(
             "providers_created": created,
             "providers_updated": updated,
             "favorites_restored": favorites_restored,
+            "disabled_restored": disabled_restored,
         }
     )
 
@@ -101,8 +102,14 @@ async def export_(session: AsyncSession = Depends(get_session)) -> ApiResponse:
     # importers. On import, the new format takes precedence.
     favorites: list[FavoriteEntry] = []
     favorites_by_provider: dict[str, list[str]] = {}
+    # Same pattern for disabled models (enabled=False): a per-provider
+    # list of model_ids the user has explicitly disabled, so the
+    # dashboard's per-model toggle survives an export/import cycle.
+    models_disabled: list[FavoriteEntry] = []
+    disabled_by_provider: dict[str, list[str]] = {}
     for p in providers:
-        favs = [m.model_id for m in await models_svc.list_models(session, p.uuid_id) if m.is_favorite]
+        prov_models = await models_svc.list_models(session, p.uuid_id)
+        favs = [m.model_id for m in prov_models if m.is_favorite]
         if favs:
             favorites.append(
                 FavoriteEntry(
@@ -112,6 +119,16 @@ async def export_(session: AsyncSession = Depends(get_session)) -> ApiResponse:
                 )
             )
             favorites_by_provider[p.name] = favs
+        disabled = [m.model_id for m in prov_models if not m.enabled]
+        if disabled:
+            models_disabled.append(
+                FavoriteEntry(
+                    provider_uuid=p.uuid_id,
+                    provider_name=p.name,
+                    model_ids=disabled,
+                )
+            )
+            disabled_by_provider[p.name] = disabled
     payload = ExportPayload(
         providers=[
             {
@@ -132,6 +149,8 @@ async def export_(session: AsyncSession = Depends(get_session)) -> ApiResponse:
         ],
         favorites=favorites,
         favorites_by_provider=favorites_by_provider,
+        models_disabled=models_disabled,
+        disabled_by_provider=disabled_by_provider,
         settings={s.key: s.value for s in settings},
     )
     return ApiResponse(data=payload.model_dump())
@@ -182,16 +201,25 @@ async def probe_run(
             )
         return ApiResponse(data={"scheduled": scheduled_count, "skipped": skipped})
 
-    scheduled = await trigger_now(provider_id, model_id)
-    if not scheduled:
-        # The target job (or its model/provider) is disabled. Surface a 409 so
-        # the caller can show feedback instead of a silent no-op.
+    result = await trigger_now(provider_id, model_id)
+    if result == EnqueueResult.DROPPED_FULL:
+        # Queue is saturated with MANUALs and nothing to evict. 503
+        # + Retry-After so the client knows to back off briefly.
+        raise HTTPException(
+            status_code=503,
+            detail="trigger queue full; please retry shortly",
+            headers={"Retry-After": "5"},
+        )
+    if result == EnqueueResult.DEDUPED:
+        # Either the (provider, model) was disabled, or the request
+        # matched an already-pending item. The 409 wording is
+        # preserved for back-compat — disabled is the common case.
         target = "model" if model_id is not None else "provider"
         raise HTTPException(
             status_code=409,
-            detail=f"{target} is disabled; enable it before triggering a probe",
+            detail=f"{target} is disabled or already pending; enable it before triggering a probe",
         )
-    return ApiResponse(data={"scheduled": True})
+    return ApiResponse(data={"enqueued": True})
 
 
 @router.post("/probe/run-all", response_model=ApiResponse)
@@ -207,6 +235,16 @@ async def probe_run_all(session: AsyncSession = Depends(get_session)) -> ApiResp
     /results endpoint to see results land.
     """
     scheduled, skipped = await trigger_all_models_now()
+    # If EVERY model got DROPPED_FULL, the queue is at capacity
+    # with MANUALs. Surface 503 + Retry-After. Mixed results stay
+    # as a normal 200 (the user got *some* probes queued).
+    if scheduled == 0 and skipped > 0:
+        # Heuristic: a saturated queue typically reports 0 enqueued
+        # because every request was deduped (DROPPED_FULL counts
+        # as skipped in trigger_provider_now). We can't tell apart
+        # "all disabled" from "queue full" without inspecting
+        # queue state, so let the caller try a smaller request.
+        return ApiResponse(data={"scheduled": scheduled, "skipped": skipped})
     return ApiResponse(data={"scheduled": scheduled, "skipped": skipped})
 
 

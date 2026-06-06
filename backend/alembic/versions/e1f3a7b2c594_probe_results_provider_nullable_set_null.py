@@ -12,6 +12,7 @@ Revises: d4f8a2c6b1e3
 Create Date: 2026-06-05 02:10:00.000000
 
 """
+
 from typing import Sequence, Union
 
 import sqlalchemy as sa
@@ -102,20 +103,14 @@ def upgrade() -> None:
             "ON probe_results (provider_id, model_id, checked_at)"
         )
     )
-    conn.execute(
-        sa.text("CREATE INDEX ix_probe_results_checked_at ON probe_results (checked_at)")
-    )
+    conn.execute(sa.text("CREATE INDEX ix_probe_results_checked_at ON probe_results (checked_at)"))
     conn.execute(
         sa.text(
-            "CREATE INDEX ix_probe_results_provider_uuid_at_probe "
-            "ON probe_results (provider_uuid_at_probe)"
+            "CREATE INDEX ix_probe_results_provider_uuid_at_probe ON probe_results (provider_uuid_at_probe)"
         )
     )
     conn.execute(
-        sa.text(
-            "CREATE INDEX ix_probe_results_model_uuid_at_probe "
-            "ON probe_results (model_uuid_at_probe)"
-        )
+        sa.text("CREATE INDEX ix_probe_results_model_uuid_at_probe ON probe_results (model_uuid_at_probe)")
     )
 
     # Re-enable FK enforcement. SQLite validates the table at this
@@ -195,14 +190,10 @@ def downgrade() -> None:
     conn.execute(sa.text("CREATE INDEX ix_probe_results_checked_at ON probe_results (checked_at)"))
     conn.execute(
         sa.text(
-            "CREATE INDEX ix_probe_results_provider_uuid_at_probe "
-            "ON probe_results (provider_uuid_at_probe)"
+            "CREATE INDEX ix_probe_results_provider_uuid_at_probe ON probe_results (provider_uuid_at_probe)"
         )
     )
     conn.execute(
-        sa.text(
-            "CREATE INDEX ix_probe_results_model_uuid_at_probe "
-            "ON probe_results (model_uuid_at_probe)"
-        )
+        sa.text("CREATE INDEX ix_probe_results_model_uuid_at_probe ON probe_results (model_uuid_at_probe)")
     )
     conn.execute(sa.text("PRAGMA foreign_keys = ON;"))

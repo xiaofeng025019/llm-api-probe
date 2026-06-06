@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import uuid as _uuid
+
 import httpx
 import pytest
 import respx
-import uuid as _uuid
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.core import scheduler as sched_mod
@@ -285,9 +286,7 @@ async def test_export_includes_favorites(api_client: httpx.AsyncClient) -> None:
     r = await api_client.post("/api/v1/export")
     body = r.json()["data"]
     # New (uuid-keyed) format is always present
-    assert body["favorites"] == [
-        {"provider_uuid": pid, "provider_name": "fav-test", "model_ids": ["gpt-4o"]}
-    ]
+    assert body["favorites"] == [{"provider_uuid": pid, "provider_name": "fav-test", "model_ids": ["gpt-4o"]}]
     # Legacy (name-keyed) format is also kept for backward compat
     assert body["favorites_by_provider"] == {"fav-test": ["gpt-4o"]}
 
@@ -360,9 +359,7 @@ async def test_import_favorites_survive_provider_rename(api_client: httpx.AsyncC
     exported = (await api_client.post("/api/v1/export")).json()["data"]
 
     # Rename the provider
-    r = await api_client.patch(
-        f"/api/v1/providers/{pid}", json={"name": "renamed"}
-    )
+    r = await api_client.patch(f"/api/v1/providers/{pid}", json={"name": "renamed"})
     assert r.status_code == 200
 
     # Soft-delete then import (which restores the provider)
@@ -425,6 +422,85 @@ async def test_import_legacy_favorites_format_still_works(api_client: httpx.Asyn
     assert favorites.get("gpt-4o") is True
 
 
+# ---------- model.enabled roundtrip -----------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_export_includes_disabled_models(api_client: httpx.AsyncClient) -> None:
+    """Exported payload should include a per-provider list of
+    `disabled_models` (i.e. models with enabled=False), so the user
+    can save their disable/enable decisions alongside favorites and
+    restore them on import.
+
+    Mirrors the favorites contract: a new (uuid+name) format and a
+    legacy name-keyed map for backward compat with older imports.
+    """
+    # Seed: one provider, two models, one of them disabled.
+    r = await api_client.post(
+        "/api/v1/providers",
+        json={"name": "p", "kind": "openai", "base_url": "https://x", "api_key": "k"},
+    )
+    pid = r.json()["data"]["id"]
+    with respx.mock:
+        respx.get("https://x/v1/models").mock(
+            return_value=httpx.Response(200, json={"data": [{"id": "gpt-4o"}, {"id": "gpt-4o-mini"}]})
+        )
+        await api_client.post(f"/api/v1/providers/{pid}/sync-models")
+    r = await api_client.get(f"/api/v1/providers/{pid}/models")
+    disabled = next(m for m in r.json()["data"] if m["model_id"] == "gpt-4o-mini")
+    await api_client.patch(f"/api/v1/models/{disabled['id']}", json={"enabled": False})
+
+    # Export and check the disabled-models map.
+    body = (await api_client.post("/api/v1/export")).json()["data"]
+    # New (uuid-keyed) format is always present
+    assert body["models_disabled"] == [
+        {"provider_uuid": pid, "provider_name": "p", "model_ids": ["gpt-4o-mini"]}
+    ]
+    # Legacy (name-keyed) format is also kept for backward compat
+    assert body["disabled_by_provider"] == {"p": ["gpt-4o-mini"]}
+
+
+@pytest.mark.asyncio
+async def test_import_restores_disabled_models(api_client: httpx.AsyncClient) -> None:
+    """Re-importing an export that carries disabled-model entries
+    must re-apply enabled=False on the named provider's models, but
+    only after the provider has had its model list synced (same
+    constraint as favorites)."""
+    # Seed one provider with two models; export with disabled='gpt-4o-mini'.
+    r = await api_client.post(
+        "/api/v1/providers",
+        json={"name": "p", "kind": "openai", "base_url": "https://x", "api_key": "k"},
+    )
+    pid = r.json()["data"]["id"]
+    with respx.mock:
+        respx.get("https://x/v1/models").mock(
+            return_value=httpx.Response(200, json={"data": [{"id": "gpt-4o"}, {"id": "gpt-4o-mini"}]})
+        )
+        await api_client.post(f"/api/v1/providers/{pid}/sync-models")
+    r = await api_client.get(f"/api/v1/providers/{pid}/models")
+    disabled = next(m for m in r.json()["data"] if m["model_id"] == "gpt-4o-mini")
+    await api_client.patch(f"/api/v1/models/{disabled['id']}", json={"enabled": False})
+
+    exported = (await api_client.post("/api/v1/export")).json()["data"]
+    assert exported["disabled_by_provider"] == {"p": ["gpt-4o-mini"]}
+
+    # Wipe, then import (which restores the soft-deleted provider).
+    await api_client.delete(f"/api/v1/providers/{pid}")
+    r = await api_client.post("/api/v1/import", json=exported)
+    assert r.status_code == 200
+    body = r.json()["data"]
+    assert body["providers_updated"] >= 1
+    assert body["disabled_restored"] >= 1
+
+    # Verify the disabled state is back.
+    r = await api_client.get("/api/v1/providers")
+    prov_id = next(p["id"] for p in r.json()["data"] if p["name"] == "p")
+    r = await api_client.get(f"/api/v1/providers/{prov_id}/models")
+    enabled = {m["model_id"]: m["enabled"] for m in r.json()["data"]}
+    assert enabled.get("gpt-4o-mini") is False
+    assert enabled.get("gpt-4o") is True
+
+
 @pytest.mark.asyncio
 async def test_hard_delete_model_preserves_probe_results(api_client: httpx.AsyncClient) -> None:
     """After our cascade fix, hard-deleting a model no longer
@@ -436,7 +512,8 @@ async def test_hard_delete_model_preserves_probe_results(api_client: httpx.Async
     """
     import sqlalchemy as sa
     from sqlalchemy import select
-    from app.db.models import Model, ProbeResult, Provider, ProbeTarget
+
+    from app.db.models import Model, ProbeResult, ProbeTarget, Provider
     from app.db.session import get_session_maker
 
     sm = get_session_maker()
@@ -491,11 +568,13 @@ async def test_hard_delete_model_preserves_probe_results(api_client: httpx.Async
         # Verify: probe_results.model_id should now be NULL,
         # but the uuid snapshot should still be there.
         # Use a fresh select (not session.get) to avoid cached state.
-        pr_check = (await session.execute(
-            select(ProbeResult).where(
-                ProbeResult.model_uuid_at_probe == m_uuid
-            ).execution_options(populate_existing=True)
-        )).scalar_one_or_none()
+        pr_check = (
+            await session.execute(
+                select(ProbeResult)
+                .where(ProbeResult.model_uuid_at_probe == m_uuid)
+                .execution_options(populate_existing=True)
+            )
+        ).scalar_one_or_none()
         assert pr_check is not None, "probe_result should survive model hard-delete"
         assert pr_check.model_id is None, "model_id FK should be SET NULL"
         assert pr_check.model_uuid_at_probe == m_uuid, "uuid snapshot should be preserved"
@@ -519,7 +598,8 @@ async def test_hard_delete_provider_preserves_probe_results(api_client: httpx.As
     """
     import sqlalchemy as sa
     from sqlalchemy import select
-    from app.db.models import Model, ProbeResult, Provider, ProbeTarget
+
+    from app.db.models import Model, ProbeResult, ProbeTarget, Provider
     from app.db.session import get_session_maker
 
     sm = get_session_maker()
@@ -571,11 +651,13 @@ async def test_hard_delete_provider_preserves_probe_results(api_client: httpx.As
         )
         await session.commit()
 
-        pr_check = (await session.execute(
-            select(ProbeResult).where(
-                ProbeResult.provider_uuid_at_probe == p_uuid
-            ).execution_options(populate_existing=True)
-        )).scalar_one_or_none()
+        pr_check = (
+            await session.execute(
+                select(ProbeResult)
+                .where(ProbeResult.provider_uuid_at_probe == p_uuid)
+                .execution_options(populate_existing=True)
+            )
+        ).scalar_one_or_none()
         assert pr_check is not None, "probe_result should survive provider hard-delete"
         assert pr_check.provider_id is None, "provider_id FK should be SET NULL"
         assert pr_check.model_id is None, "model_id FK should be SET NULL via the cascaded model delete"
@@ -602,8 +684,76 @@ async def test_probe_run_triggers(api_client: httpx.AsyncClient) -> None:
             json={"name": "p1", "kind": "openai", "base_url": "https://x", "api_key": "k"},
         )
     ).json()["data"]["id"]
+    # Provider-wide (no model_id) → list_models target → returns
+    # {scheduled, skipped} (0 / 0 because no models exist yet).
     r = await api_client.post(f"/api/v1/probe/run?provider_id={pid}")
     assert r.status_code == 200
+    body = r.json()["data"]
+    assert body == {"scheduled": 0, "skipped": 0}
 
     r = await api_client.post(f"/api/v1/probe/run?provider_id={_uuid.uuid4()}")
     assert r.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_probe_run_with_model_returns_enqueued_field(
+    api_client: httpx.AsyncClient,
+) -> None:
+    """When a model_id is provided, the single-model MANUAL trigger
+    returns {enqueued: True} so the UI can distinguish "queued" from
+    "deduped (already pending)".
+    """
+    pid = (
+        await api_client.post(
+            "/api/v1/providers",
+            json={"name": "p1m", "kind": "openai", "base_url": "https://x", "api_key": "k"},
+        )
+    ).json()["data"]["id"]
+    mid = (
+        await api_client.post(
+            f"/api/v1/providers/{pid}/models",
+            json={"model_id": "gpt-4o"},
+        )
+    ).json()["data"]["id"]
+    r = await api_client.post(f"/api/v1/probe/run?provider_id={pid}&model_id={mid}")
+    assert r.status_code == 200
+    body = r.json()["data"]
+    assert body == {"enqueued": True}
+
+
+@pytest.mark.asyncio
+async def test_probe_run_returns_503_when_queue_full(
+    api_client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When the trigger queue is full of MANUALs and the new MANUAL
+    can't displace, the single-model /probe/run endpoint must
+    return 503 + Retry-After so the client knows to back off.
+    """
+    from app.core import trigger_queue
+    from app.core.trigger_queue import EnqueueResult
+
+    async def fake_full_enqueue(req):
+        return EnqueueResult.DROPPED_FULL
+
+    monkeypatch.setattr(
+        trigger_queue.get_trigger_queue(),
+        "enqueue",
+        fake_full_enqueue,
+    )
+    pid = (
+        await api_client.post(
+            "/api/v1/providers",
+            json={"name": "p2", "kind": "openai", "base_url": "https://x", "api_key": "k"},
+        )
+    ).json()["data"]["id"]
+    mid = (
+        await api_client.post(
+            f"/api/v1/providers/{pid}/models",
+            json={"model_id": "gpt-4o"},
+        )
+    ).json()["data"]["id"]
+    r = await api_client.post(f"/api/v1/probe/run?provider_id={pid}&model_id={mid}")
+    assert r.status_code == 503
+    assert "Retry-After" in r.headers
+    # Retry-After should be a small positive integer
+    assert int(r.headers["Retry-After"]) > 0

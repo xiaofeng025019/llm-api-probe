@@ -59,6 +59,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # hot path on every failed probe (2× DELETEs each). Now its own
     # periodic job so cleanup cost is amortized.
     from app.core.scheduler import CLEANUP_ERROR_HISTORY_INTERVAL_SECONDS
+
     with contextlib.suppress(Exception):
         sched.add_job(
             cleanup_error_history_loop,
@@ -86,6 +87,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # crashes the lifespan handler.
     import asyncio as _asyncio
 
+    # Keep strong refs to lifespan-spawned tasks so the GC doesn't
+    # discard them mid-flight. asyncio holds only weak refs, so a
+    # fire-and-forget create_task() can be silently cancelled before
+    # it runs (or worse, mid-run). We park them on the app state so
+    # both the startup probe and the worker pool launcher survive.
+    _bg_tasks: set[_asyncio.Task] = set()
+
     async def _startup_probe_all() -> None:
         try:
             scheduled, skipped = await trigger_all_models_now()
@@ -93,7 +101,19 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         except Exception:
             log.exception("startup catch-up probe failed")
 
-    _asyncio.create_task(_startup_probe_all())
+    _t1 = _asyncio.create_task(_startup_probe_all())
+    _bg_tasks.add(_t1)
+    _t1.add_done_callback(_bg_tasks.discard)
+
+    # Start the unified trigger-queue worker pool. The 4 trigger
+    # sources (periodic APScheduler, random sweep, SSE wake,
+    # manual API) all submit to this queue; the workers drain
+    # it. max_concurrency from settings caps the pool size.
+    from app.core import scheduler as _sched_mod
+
+    _t2 = _asyncio.create_task(_sched_mod.start_workers(settings.max_concurrency))
+    _bg_tasks.add(_t2)
+    _t2.add_done_callback(_bg_tasks.discard)
 
     # If the database already has obvious test-data providers (from prior
     # manual curl-ing or scratch work), surface a one-line warning at boot so
@@ -115,13 +135,19 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             )
     yield
     # Shutdown order matters:
-    # 1) Stop accepting new job firings and wait for in-flight probes to
-    #    finish (capped so a slow upstream can't block forever).
-    # 2) Then close the shared httpx client.
-    # The previous wait=False was racy: a probe mid-stream when the client
-    # closed would raise StreamConsumed / ClientClosed and the outer
-    # except in _run_probe swallowed it, leaving ProbeResult and JobState
-    # uncommitted.
+    # 1) Stop the trigger-queue workers and wait for in-flight
+    #    probes to drain. (The queue stops accepting new work; the
+    #    workers finish whatever they're holding.)
+    # 2) Stop APScheduler — its IntervalTrigger callbacks are
+    #    the *periodic* source of triggers, so we shut it down
+    #    *before* the workers finish to avoid new periodic
+    #    enqueues racing the workers' drain.
+    # 3) Close the shared httpx client — only after all in-flight
+    #    probes are done, so a probe mid-stream doesn't see a
+    #    closed client.
+    from app.core import scheduler as _sched_mod
+
+    await _sched_mod.stop_workers(timeout=30.0)
     if sched.running:
         try:
             sched.shutdown(wait=True)
@@ -164,10 +190,14 @@ async def readyz() -> JSONResponse:
     """
     sched = get_scheduler()
     if not sched.running:
-        return JSONResponse(status_code=503, content={"status": "starting", "checks": {"scheduler": "not_running"}})
+        return JSONResponse(
+            status_code=503, content={"status": "starting", "checks": {"scheduler": "not_running"}}
+        )
     try:
         from sqlalchemy import text
+
         from app.db.session import get_session_maker
+
         sm = get_session_maker()
         async with sm() as session:
             await session.execute(text("SELECT 1"))
@@ -176,7 +206,9 @@ async def readyz() -> JSONResponse:
             status_code=503,
             content={"status": "unhealthy", "checks": {"db": f"{type(e).__name__}: {e}"}},
         )
-    return JSONResponse(status_code=200, content={"status": "ok", "checks": {"scheduler": "running", "db": "ok"}})
+    return JSONResponse(
+        status_code=200, content={"status": "ok", "checks": {"scheduler": "running", "db": "ok"}}
+    )
 
 
 # Static frontend mount (must be last; catch-all) with SPA deep-link fallback.

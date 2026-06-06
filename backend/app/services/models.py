@@ -160,6 +160,84 @@ async def set_favorites(session: AsyncSession, provider_id: uuid.UUID, model_ids
     return sum(1 for m in all_models if m.is_favorite)
 
 
+async def set_disabled(session: AsyncSession, provider_id: uuid.UUID, model_ids: list[str]) -> int:
+    """Set enabled=False on the listed models for one provider, and
+    enabled=True on every other active model under the same provider.
+
+    Mirrors ``set_favorites`` in shape and lifecycle semantics: any
+    model_id not yet in the models table (e.g. a freshly imported
+    provider that hasn't had /v1/models synced yet) gets a placeholder
+    row — but this time ``enabled=False`` so the user's disable
+    decision survives the import.
+
+    Used by the import service to restore the user's per-model
+    enable/disable decisions from an export.
+
+    Returns the total number of disabled models after this call.
+    """
+    provider = await session.scalar(select(Provider).where(uuid_equals(Provider.uuid_id, provider_id)))
+    if provider is None:
+        return 0
+
+    desired = set(model_ids)
+    changed = 0
+    # Ensure every desired model_id has a row (restore if soft-deleted).
+    for mid in desired:
+        existing_row = await session.scalar(
+            select(Model).where(
+                Model.provider_id == provider.id, Model.model_id == mid, Model.deleted_at.is_(None)
+            )
+        )
+        if existing_row is not None:
+            if existing_row.enabled:
+                existing_row.enabled = False
+                changed += 1
+        else:
+            deleted_row = await session.scalar(
+                select(Model).where(
+                    Model.provider_id == provider.id, Model.model_id == mid, Model.deleted_at.is_not(None)
+                )
+            )
+            if deleted_row is not None:
+                deleted_row.deleted_at = None
+                deleted_row.enabled = False
+                changed += 1
+            else:
+                # Create new placeholder model — disabled, so the
+                # user's intent is preserved until the next sync.
+                session.add(
+                    Model(
+                        provider_id=provider.id,
+                        model_id=mid,
+                        type=ModelType.chat,  # placeholder; sync will fix
+                        enabled=False,
+                        is_favorite=False,
+                    )
+                )
+                changed += 1
+    await session.flush()
+    # Re-read to merge placeholder inserts with the live set.
+    all_models = list(
+        (
+            await session.execute(
+                select(Model).where(Model.provider_id == provider.id, Model.deleted_at.is_(None))
+            )
+        )
+        .scalars()
+        .all()
+    )
+    for m in all_models:
+        want_disabled = m.model_id in desired
+        if want_disabled and m.enabled:
+            m.enabled = False
+            changed += 1
+        elif not want_disabled and not m.enabled:
+            m.enabled = True
+            changed += 1
+    await session.commit()
+    return sum(1 for m in all_models if not m.enabled)
+
+
 async def upsert_discovered(
     session: AsyncSession, provider_id: uuid.UUID, discovered: list[DiscoveredModel]
 ) -> list[Model]:

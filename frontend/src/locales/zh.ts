@@ -68,6 +68,7 @@ const zh = {
   errors: {
     network: { title: "网络错误", detail: "请检查连接后重试" },
     action: { title: "操作失败" },
+    retryIn: "请于 ${seconds} 秒后重试",
     title: "错误记录",
     subtitle: "最近的探针失败。被钉住的错误会一直保留直到你取消。",
     unknownCode: "未知",
