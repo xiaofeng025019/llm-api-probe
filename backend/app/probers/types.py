@@ -8,6 +8,13 @@ from typing import Protocol
 from app.db.models import ErrorCode, ModelType, Provider
 
 
+# How much of an upstream error body we keep in the in-memory
+# `ProbeOutcome.error_message` field. Probers slice the response body
+# to this length before returning so a runaway upstream that dumps
+# 10MB of HTML doesn't blow up the dashboard render.
+MAX_UPSTREAM_ERROR_BODY_CHARS = 500
+
+
 @dataclass(slots=True)
 class DiscoveredModel:
     model_id: str
@@ -41,3 +48,4 @@ class Prober(Protocol):
     ) -> ProbeOutcome: ...
 
     def classify_model_type(self, model_id: str) -> ModelType: ...
+

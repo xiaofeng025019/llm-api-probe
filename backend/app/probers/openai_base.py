@@ -18,7 +18,7 @@ from app.probers.error_mapping import (
     map_status_to_error,
 )
 from app.probers.model_classify import classify_model_id
-from app.probers.types import DiscoveredModel, ProbeOutcome
+from app.probers.types import MAX_UPSTREAM_ERROR_BODY_CHARS, DiscoveredModel, ProbeOutcome
 
 
 # Some providers claim "OpenAI compatible" but do not implement the
@@ -121,7 +121,7 @@ class OpenAIBaseProber:
             http_status=resp.status_code,
             latency_ms=latency,
             error_code=map_status_to_error(resp.status_code),
-            error_message=resp.text[:500] or None,
+            error_message=resp.text[:MAX_UPSTREAM_ERROR_BODY_CHARS] or None,
         )
 
     async def probe_chat(
@@ -158,7 +158,7 @@ class OpenAIBaseProber:
                     latency_ms=latency,
                     ttfb_ms=None,
                     error_code=None if ok else map_status_to_error(resp.status_code),
-                    error_message=None if ok else resp.text[:500] or None,
+                    error_message=None if ok else resp.text[:MAX_UPSTREAM_ERROR_BODY_CHARS] or None,
                 )
 
             async with self._client.stream(
@@ -180,7 +180,7 @@ class OpenAIBaseProber:
                         http_status=resp.status_code,
                         latency_ms=int((time.perf_counter() - t0) * 1000),
                         error_code=map_status_to_error(resp.status_code),
-                        error_message=err_text[:500] or None,
+                        error_message=err_text[:MAX_UPSTREAM_ERROR_BODY_CHARS] or None,
                     )
                 first_byte_at: float | None = None
                 async for chunk in resp.aiter_bytes():

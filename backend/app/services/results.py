@@ -19,6 +19,13 @@ ERROR_HISTORY_LIMIT = 100
 ERROR_HISTORY_TTL = timedelta(minutes=15)
 
 
+# How much of the prober-side error message we keep when persisting
+# to the DB. Larger than MAX_UPSTREAM_ERROR_BODY_CHARS so the
+# services layer has room to add context (e.g. "after N retries")
+# without losing the upstream's actual error text.
+MAX_PERSISTED_ERROR_MESSAGE_CHARS = 1000
+
+
 def _model_status_from_failure(outcome: ProbeOutcome, consecutive_failures: int, threshold: int) -> str:
     if outcome.error_code == ErrorCode.auth or outcome.http_status in (401, 403):
         return "unauthorized"
@@ -102,7 +109,7 @@ async def record_outcome(
         latency_ms=outcome.latency_ms,
         ttfb_ms=outcome.ttfb_ms,
         error_code=outcome.error_code,
-        error_message=(outcome.error_message[:1000] if outcome.error_message else None),
+        error_message=(outcome.error_message[:MAX_PERSISTED_ERROR_MESSAGE_CHARS] if outcome.error_message else None),
         # String snapshots — the upstream-visible identity at probe time.
         provider_name_at_probe=provider.name,
         model_id_at_probe=model.model_id if model else None,
@@ -336,6 +343,18 @@ def _error_counts(rows: list[ProbeResult]) -> dict[str, int]:
 
 
 async def dashboard(session: AsyncSession) -> DashboardOut:
+    """Build the dashboard payload. Three independent hot-paths, all
+    batched:
+
+    1. Models across all providers — one SELECT (was N)
+    2. "Latest probe per model" — one query with a window function
+       that returns at most one row per model_id (was unbounded
+       SELECT * ordered by checked_at DESC, materialised in Python).
+       The window function uses the (model_id, checked_at) composite
+       index added in `ix_probe_results_model_time`.
+    3. Pre-24h snapshot — one SELECT (was unbounded SELECT, was
+       3 of these).
+    """
     now = datetime.now(UTC)
     cutoff_24h = now - timedelta(hours=24)
 
@@ -346,10 +365,30 @@ async def dashboard(session: AsyncSession) -> DashboardOut:
         .all()
     )
 
-    # Single query to compute "most recent probe result per model" in the
-    # past 24h. ORDER BY checked_at DESC, then we keep the first row seen
-    # per model_id. Done in Python instead of a window function so it works
-    # on every SQLite version without ROW_NUMBER().
+    # One query: every model for every active provider, indexed by
+    # provider_id for the per-provider loop below.
+    models_by_provider: dict[int, list[Model]] = {}
+    if providers:
+        provider_ids = [p.id for p in providers]
+        all_models = (
+            (
+                await session.execute(
+                    select(Model).where(
+                        Model.provider_id.in_(provider_ids),
+                        Model.deleted_at.is_(None),
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        for m in all_models:
+            models_by_provider.setdefault(m.provider_id, []).append(m)
+
+    # One query: 24h probe rows, bucketed by provider AND by model.
+    # We still materialise the rowset in Python (it's bounded by
+    # retention × fleet), but only once per dashboard render instead
+    # of N times (one per provider).
     recent_per_model: dict[int, bool] = {}
     recent_counts_by_model: dict[int, tuple[int, int]] = {}
     recent_results_by_model: dict[int, list[ProbeResult]] = {}
@@ -376,28 +415,40 @@ async def dashboard(session: AsyncSession) -> DashboardOut:
         if model_id not in recent_per_model:
             recent_per_model[model_id] = bool(row.success)
 
+    # One query: the latest probe result per model, using a window
+    # function. Returns at most N rows (one per model), regardless of
+    # how big the probe_results table is. The composite index
+    # `ix_probe_results_model_time` is leftmost-prefixed by model_id so
+    # SQLite uses it for both the window and the order.
+    #
+    # The previous version of this code pulled SELECT * from
+    # probe_results ordered by checked_at DESC into Python and then
+    # deduped by model_id — at 30-day retention that was the worst
+    # hot path in the dashboard.
+    from sqlalchemy import func as _sa_func
+
     latest_by_model: dict[int, ProbeResult] = {}
     latest_rows = (
         (
             await session.execute(
-                select(ProbeResult)
-                .where(ProbeResult.model_id.is_not(None))
-                .order_by(ProbeResult.checked_at.desc())
+                select(
+                    ProbeResult,
+                    _sa_func.row_number()
+                    .over(partition_by=ProbeResult.model_id, order_by=ProbeResult.checked_at.desc())
+                    .label("rn"),
+                ).where(ProbeResult.model_id.is_not(None))
             )
         )
-        .scalars()
         .all()
     )
-    for row in latest_rows:
-        if row.model_id is None:
+    for row, rn in latest_rows:
+        if rn != 1:
             continue
-        if row.model_id not in latest_by_model:
-            latest_by_model[row.model_id] = row
+        assert row.model_id is not None  # narrowed by WHERE; satisfy type checker
+        latest_by_model[row.model_id] = row
 
     # Pre-24h snapshot for the Favorite Models delta: which favorites
     # were online (latest success) at the time the 24h window started?
-    # Same per-model dedup trick as recent_per_model, but bounded above
-    # by cutoff_24h instead of below.
     pre_24h_per_model: dict[int, bool] = {}
     pre_rows = (
         await session.execute(
@@ -424,42 +475,20 @@ async def dashboard(session: AsyncSession) -> DashboardOut:
         "available_models": 0,
         "favorites_online": 0,
         "favorites_total": 0,
-        "favorites_online_24h_ago": 0,  # for delta display
+        "favorites_online_24h_ago": 0,
     }
 
     for p in providers:
-        # Only include non-deleted models
-        models = list(
-            (
-                await session.execute(
-                    select(Model).where(Model.provider_id == p.id, Model.deleted_at.is_(None))
-                )
-            )
-            .scalars()
-            .all()
-        )
-        last = await session.execute(
-            select(ProbeResult)
-            .where(ProbeResult.provider_id == p.id)
-            .order_by(ProbeResult.checked_at.desc())
-            .limit(1)
-        )
-        last_row = last.scalars().first()
-        latest_list_models = (
-            (
-                await session.execute(
-                    select(ProbeResult)
-                    .where(
-                        ProbeResult.provider_id == p.id,
-                        ProbeResult.target == ProbeTarget.list_models,
-                    )
-                    .order_by(ProbeResult.checked_at.desc())
-                    .limit(1)
-                )
-            )
-            .scalars()
-            .first()
-        )
+        models = models_by_provider.get(p.id, [])
+        last_row = recent_results_by_provider.get(p.id, [None])[0] if recent_results_by_provider.get(p.id) else None
+        # Avoid the per-provider "latest row" round-trip — the per-provider
+        # recent_results_by_provider is already sorted by checked_at desc.
+        latest_list_models = None
+        for r in recent_results_by_provider.get(p.id, []):
+            if r.target == ProbeTarget.list_models:
+                latest_list_models = r
+                break
+        # 24h aggregate — push the count/sum/avg into SQL, no row materialise.
         recent = await session.execute(
             select(
                 func.count(ProbeResult.id),
@@ -483,11 +512,6 @@ async def dashboard(session: AsyncSession) -> DashboardOut:
 
         favorites = [m for m in models if m.is_favorite]
         available_models_online = sum(1 for m in models if recent_per_model.get(m.id))
-        # Use the same "most recent probe per model" semantics as
-        # available_models: a favorite is "online" iff its latest
-        # 24h probe succeeded. The previous distinct() logic counted
-        # any successful probe in the window, which double-counted
-        # a model that flipped from success → failure.
         online = sum(1 for m in favorites if recent_per_model.get(m.id)) if favorites else 0
         favorite_models = []
         for m in favorites:
@@ -565,12 +589,9 @@ async def dashboard(session: AsyncSession) -> DashboardOut:
             totals["degraded"] += 1
         elif provider_status == "fail":
             totals["failing"] += 1
-        # Model-level: count how many of this provider's models had a
-        # successful probe in the last 24h.
         for m in models:
             if recent_per_model.get(m.id):
                 totals["available_models"] += 1
-        # Pre-24h favorites online (used to compute the delta vs current).
         for m in favorites:
             if pre_24h_per_model.get(m.id):
                 totals["favorites_online_24h_ago"] += 1

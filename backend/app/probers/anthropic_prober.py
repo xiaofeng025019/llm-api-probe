@@ -14,7 +14,7 @@ from app.probers.error_mapping import (
     map_status_to_error,
 )
 from app.probers.model_classify import classify_model_id
-from app.probers.types import ProbeOutcome
+from app.probers.types import MAX_UPSTREAM_ERROR_BODY_CHARS, ProbeOutcome
 
 ANTHROPIC_DEFAULT_VERSION = "2023-06-01"
 
@@ -79,7 +79,7 @@ class AnthropicProber:
                     http_status=resp.status_code,
                     latency_ms=latency,
                     error_code=None if ok else map_status_to_error(resp.status_code),
-                    error_message=None if ok else resp.text[:500] or None,
+                    error_message=None if ok else resp.text[:MAX_UPSTREAM_ERROR_BODY_CHARS] or None,
                 )
 
             async with self._client.stream(
@@ -96,7 +96,7 @@ class AnthropicProber:
                         http_status=resp.status_code,
                         latency_ms=int((time.perf_counter() - t0) * 1000),
                         error_code=map_status_to_error(resp.status_code),
-                        error_message=err_text[:500] or None,
+                        error_message=err_text[:MAX_UPSTREAM_ERROR_BODY_CHARS] or None,
                     )
                 first_byte_at: float | None = None
                 async for chunk in resp.aiter_bytes():

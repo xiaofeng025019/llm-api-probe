@@ -40,11 +40,8 @@ async def test_init_db_runs_migrations_and_seeds_defaults(file_db: str) -> None:
         rows = (await session.execute(select(Setting))).scalars().all()
         keys = {r.key for r in rows}
         assert {
-            "default_interval_seconds",
             "favorite_model_interval_seconds",
             "regular_model_interval_seconds",
-            "retention_days",
-            "max_concurrency",
         } <= keys
 
         # Verify business tables exist (alembic_version + 5 tables)

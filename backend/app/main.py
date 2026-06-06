@@ -150,9 +150,34 @@ async def healthz() -> dict[str, str]:
 
 
 @app.get("/api/v1/readyz")
-async def readyz() -> dict[str, str]:
+async def readyz() -> JSONResponse:
+    """Readiness probe — returns 200 only when the service is actually
+    able to serve traffic. Per k8s convention this should be stricter
+    than `/healthz` (which only proves the process is alive).
+
+    Checks:
+    1. Scheduler is running (job loop is up)
+    2. DB responds to a trivial SELECT 1 (no broken schema/lock)
+    3. Startup has completed (sync_all_jobs has run)
+
+    Returns 503 with a structured error payload if any check fails —
+    the orchestrator (k8s, supervisor) can decide what to do.
+    """
     sched = get_scheduler()
-    return {"status": "ok" if sched.running else "starting"}
+    if not sched.running:
+        return JSONResponse(status_code=503, content={"status": "starting", "checks": {"scheduler": "not_running"}})
+    try:
+        from sqlalchemy import text
+        from app.db.session import get_session_maker
+        sm = get_session_maker()
+        async with sm() as session:
+            await session.execute(text("SELECT 1"))
+    except Exception as e:
+        return JSONResponse(
+            status_code=503,
+            content={"status": "unhealthy", "checks": {"db": f"{type(e).__name__}: {e}"}},
+        )
+    return JSONResponse(status_code=200, content={"status": "ok", "checks": {"scheduler": "running", "db": "ok"}})
 
 
 # Static frontend mount (must be last; catch-all) with SPA deep-link fallback.

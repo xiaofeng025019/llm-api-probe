@@ -14,13 +14,14 @@ from app.db.session import get_engine, get_session_maker
 log = logging.getLogger(__name__)
 
 
+# Only the keys the runtime code actually reads from the DB.
+# `default_interval_seconds`, `default_timeout_seconds`, `max_concurrency`,
+# and `retention_days` live in `Settings` (env) only — the previous seed
+# wrote them to the table on every startup but no code path ever
+# consulted the table for them, so they were vestigial.
 DEFAULT_SETTINGS: dict[str, str] = {
-    "default_interval_seconds": "300",
     "favorite_model_interval_seconds": "300",
     "regular_model_interval_seconds": "120",
-    "default_timeout_seconds": "30",
-    "max_concurrency": "10",
-    "retention_days": "30",
 }
 
 
