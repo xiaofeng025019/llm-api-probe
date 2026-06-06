@@ -25,7 +25,6 @@ from app.api.v1 import api_router  # noqa: E402
 from app.core.config import get_settings  # noqa: E402
 from app.core.http import aclose_client  # noqa: E402
 from app.core.scheduler import (  # noqa: E402
-    CLEANUP_ERROR_HISTORY_INTERVAL_SECONDS,
     cleanup_error_history_loop,
     daily_cleanup,
     get_scheduler,

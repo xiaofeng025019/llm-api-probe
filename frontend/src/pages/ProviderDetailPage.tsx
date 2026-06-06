@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { api, ModelOut, ProbeResult, Provider, Setting } from "../api/types";
 import { withErrorToast } from "../lib/action";
@@ -15,7 +15,12 @@ import {
 } from "../lib/format";
 import { modelStatusIntervalLabel } from "../lib/settings";
 import { useSse } from "../hooks/useSse";
-import { ResultsChart } from "../components/ResultsChart";
+// recharts is ~300KB gzipped; lazy-load it so the dashboard
+// initial bundle doesn't pay that cost. Only fetched when the
+// user opens a provider detail page.
+const ResultsChart = lazy(() =>
+  import("../components/ResultsChart").then((m) => ({ default: m.ResultsChart })),
+);
 import {
   IconBack,
   IconCheck,
@@ -485,7 +490,9 @@ export function ProviderDetailPage() {
           </div>
         </div>
         <div role="tabpanel" aria-label={t("providerDetail.chart.tabPanel", { window: window_.label })}>
-          <ResultsChart results={results} />
+          <Suspense fallback={<div style={{ height: 240 }} />}>
+            <ResultsChart results={results} />
+          </Suspense>
         </div>
       </div>
 

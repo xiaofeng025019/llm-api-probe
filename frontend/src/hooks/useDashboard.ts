@@ -38,24 +38,34 @@ export function useDashboard(
   // SSE-driven refresh only fires the fast tier. Slow tier runs
   // on mount, on explicit refresh() calls, and on a slow interval.
   // This caps a refresh-all burst at ~1 fast refresh, not 50.
+  const inFlightFastRef = useRef<Promise<void> | null>(null);
   const inFlightSlowRef = useRef(false);
 
   const refreshFast = useCallback(async () => {
+    // Dedupe: if a fast refresh is already in flight, return the same
+    // promise so concurrent triggers (SSE coalesce + interval + manual)
+    // collapse to a single request.
+    if (inFlightFastRef.current) return inFlightFastRef.current;
     setError(null);
-    try {
-      const [d, ps, ss] = await Promise.all([
-        api.dashboard(),
-        loadProviders ? api.providers() : Promise.resolve([]),
-        api.settings(),
-      ]);
-      setDashboard(d);
-      setProviders(ps);
-      setSettings(ss);
-    } catch (e) {
+    const p = (async () => {
+      try {
+        const [d, ps, ss] = await Promise.all([
+          api.dashboard(),
+          loadProviders ? api.providers() : Promise.resolve([]),
+          api.settings(),
+        ]);
+        setDashboard(d);
+        setProviders(ps);
+        setSettings(ss);
+      } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setLoading(false);
+      inFlightFastRef.current = null;
     }
+    })();
+    inFlightFastRef.current = p;
+    return p;
   }, [loadProviders]);
 
   const refreshSlow = useCallback(async () => {

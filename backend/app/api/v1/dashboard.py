@@ -26,6 +26,7 @@ from app.schemas.api import (
     SettingOut,
     SettingPut,
 )
+from app.services import import_export as import_export_svc
 from app.services import models as models_svc
 from app.services import providers as providers_svc
 from app.services import results as results_svc
@@ -72,140 +73,15 @@ async def import_(
     body: ImportPayload,
     session: AsyncSession = Depends(get_session),
 ) -> ApiResponse:
-    created = 0
-    updated = 0
-    favorites_restored = 0
-    # Check both active and soft-deleted providers
-    existing_active = {p.name: p for p in await providers_svc.list_providers(session)}
-    existing_deleted = {
-        p.name: p
-        for p in await providers_svc.list_providers(session, include_deleted=True)
-        if p.deleted_at is not None
-    }
-    # Build a uuid -> provider map (across active + soft-deleted) so we
-    # can detect "the import spec's uuid_id already exists in this DB"
-    # and merge into that row instead of failing on a unique constraint.
-    all_providers = await providers_svc.list_providers(session, include_deleted=True)
-    by_uuid: dict[uuid.UUID, Any] = {p.uuid_id: p for p in all_providers}
+    """Apply a JSON config import to the DB.
 
-    for spec in body.providers:
-        existing_p = existing_active.get(spec.name)
-        deleted_p = existing_deleted.get(spec.name)
-        # If the spec carries a uuid_id and it already exists, prefer
-        # that row over the name-based lookup. This is the merge path
-        # for users who import into a target DB that already has the
-        # same provider under a different name (rename + import).
-        existing_uuid = by_uuid.get(spec.uuid_id) if spec.uuid_id is not None else None
-        if existing_uuid is not None and existing_uuid not in (existing_p, deleted_p):
-            # Treat the uuid match as the canonical "existing" row.
-            if existing_uuid.deleted_at is None:
-                existing_p = existing_uuid
-            else:
-                deleted_p = existing_uuid
-
-        if existing_p is not None:
-            # Update existing active provider. The import spec is the
-            # source of truth — overwrite name too, since the user
-            # may have renamed the provider between export and import.
-            patch_data: dict[str, Any] = {
-                "name": spec.name,
-                "base_url": spec.base_url,
-                "interval_seconds": spec.interval_seconds,
-                "timeout_seconds": spec.timeout_seconds,
-                "proxy": spec.proxy,
-                "headers_json": spec.headers_json,
-                "enabled": spec.enabled,
-                "api_key": spec.api_key,
-            }
-            await providers_svc.patch_provider(session, existing_p.uuid_id, ProviderPatch(**patch_data))
-            updated += 1
-        elif deleted_p is not None:
-            # Restore soft-deleted provider directly (patch_provider
-            # can't reach soft-deleted rows since it filters by
-            # include_deleted=False, and ProviderPatch has no
-            # deleted_at field).
-            deleted_p.deleted_at = None
-            deleted_p.name = spec.name
-            deleted_p.base_url = spec.base_url
-            deleted_p.kind = spec.kind
-            deleted_p.interval_seconds = spec.interval_seconds
-            deleted_p.timeout_seconds = spec.timeout_seconds
-            if spec.proxy is not None:
-                deleted_p.proxy = spec.proxy
-            if spec.headers_json is not None:
-                deleted_p.headers_json = spec.headers_json
-            deleted_p.enabled = spec.enabled
-            if spec.api_key:
-                deleted_p.api_key = spec.api_key
-            await session.commit()
-            await session.refresh(deleted_p)
-            updated += 1
-        else:
-            # Create new provider
-            if not spec.api_key:
-                # A brand-new provider must have a key.
-                raise HTTPException(
-                    status_code=400,
-                    detail=(f"provider {spec.name!r} is new; an api_key is required."),
-                )
-            await providers_svc.create_provider(session, spec)
-            created += 1
-    if body.settings:
-        await settings_svc.upsert_settings(session, body.settings)
-
-    # Restore favorites AFTER providers exist (so we can look them up).
-    # set_favorites handles the case where a model row doesn't yet
-    # exist on this DB (e.g. fresh import before any /v1/models sync)
-    # by creating a placeholder row.
-    #
-    # Lookup strategy: try uuid first (stable across renames), fall back
-    # to name (works for legacy exports that didn't include uuid).
-    if body.favorites or body.favorites_by_provider:
-        all_providers = await providers_svc.list_providers(session, include_deleted=True)
-        # Build lookup maps. Use include_deleted=True so a soft-deleted
-        # provider that the import re-created can still be found.
-        providers_by_uuid: dict[uuid.UUID, Any] = {p.uuid_id: p for p in all_providers}
-        providers_by_name: dict[str, Any] = {p.name: p for p in all_providers}
-
-        # Dedupe by (provider_uuid, name) so the same provider isn't
-        # processed twice when the export has both formats pointing to
-        # it.
-        seen: set[tuple[str, str]] = set()
-
-        # 1. Process the new (rich) format first.
-        for entry in body.favorites:
-            prov = None
-            if entry.provider_uuid is not None and entry.provider_uuid in providers_by_uuid:
-                prov = providers_by_uuid[entry.provider_uuid]
-            elif entry.provider_name in providers_by_name:
-                prov = providers_by_name[entry.provider_name]
-
-            if prov is None:
-                # Provider declared in favorites but not in providers
-                # list — skip silently. The export's `providers` field
-                # is the source of truth; favorites alone can't
-                # recreate a provider.
-                continue
-
-            key = (str(prov.uuid_id), prov.name)
-            if key in seen:
-                continue
-            seen.add(key)
-            favorites_restored += await models_svc.set_favorites(
-                session, prov.uuid_id, entry.model_ids
-            )
-
-        # 2. Process the legacy format for any provider we haven't seen yet.
-        for prov_name, model_ids in body.favorites_by_provider.items():
-            prov = providers_by_name.get(prov_name)
-            if prov is None:
-                continue
-            key = (str(prov.uuid_id), prov.name)
-            if key in seen:
-                continue
-            seen.add(key)
-            favorites_restored += await models_svc.set_favorites(session, prov.uuid_id, model_ids)
-
+    The per-spec merge logic lives in `app.services.import_export`
+    so it's unit-testable independent of the HTTP layer. This route
+    is now a 4-line coordinator.
+    """
+    created, updated = await import_export_svc.apply_provider_specs(session, body)
+    favorites_restored = await import_export_svc.apply_favorites_import(session, body)
+    await import_export_svc.apply_settings_import(session, body)
     await sync_all_jobs()
     return ApiResponse(
         data={
