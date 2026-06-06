@@ -267,6 +267,23 @@ async def probe_run(
     model_id: uuid.UUID | None = None,
     session: AsyncSession = Depends(get_session),
 ) -> ApiResponse:
+    """Trigger a probe — model-grained (preferred) or provider-wide.
+
+    Counterpart to ``POST /providers/{id}/run`` (see
+    ``app.api.v1.providers.run_now``). The split is intentional:
+
+    * **With ``model_id``** — schedules a single model. This is the only
+      endpoint that does that; the React per-model "Check status" button
+      hits this path via ``api.probeNow(providerId, modelId)``.
+    * **Without ``model_id``** — falls back to a provider-wide sweep.
+      Functionally identical to ``/providers/{id}/run``; both call
+      ``trigger_provider_now``. Kept for back-compat with any external
+      caller that already wires the query-string form.
+
+    New code that wants the **provider-wide** behaviour should prefer
+    ``/providers/{id}/run`` (cleaner URL, no query string). Don't fold
+    the two endpoints together — both ship in the public surface.
+    """
     if provider_id is None:
         raise HTTPException(status_code=400, detail="provider_id is required")
     if (await providers_svc.get_provider(session, provider_id)) is None:

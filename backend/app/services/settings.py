@@ -1,4 +1,10 @@
-"""Setting service: KV config persisted in settings table."""
+"""Setting service: KV config persisted in the ``settings`` DB table.
+
+This is the **runtime tunable** layer. Counterpart: ``app.core.config``
+holds the bootstrap layer (host/port/db URL/data dir) — see that file's
+docstring for the split rule. Anything an operator should be able to
+flip from the Settings page lives here, not there.
+"""
 
 from __future__ import annotations
 
@@ -12,6 +18,15 @@ REGULAR_MODEL_INTERVAL_KEY = "regular_model_interval_seconds"
 FAVORITE_MODEL_FAILURE_CONFIRMATIONS_KEY = "favorite_model_failure_confirmations"
 REGULAR_MODEL_FAILURE_CONFIRMATIONS_KEY = "regular_model_failure_confirmations"
 PROVIDER_RATE_LIMIT_KEY = "provider_rate_limit_per_minute"
+# Toggles for the cost-saving probe scheduling features (see
+# app/core/scheduler.py). Both default ON so the saving kicks in
+# automatically; flip either OFF to revert to the old behaviour for
+# debugging. Stored as "true"/"false" strings to match every other
+# Setting row (no JSON, keep the table dumb-and-greppable).
+ADAPTIVE_BACKOFF_ENABLED_KEY = "adaptive_backoff_enabled"
+IDLE_THROTTLE_ENABLED_KEY = "idle_throttle_enabled"
+DEFAULT_ADAPTIVE_BACKOFF_ENABLED = True
+DEFAULT_IDLE_THROTTLE_ENABLED = True
 DEFAULT_FAVORITE_MODEL_INTERVAL_SECONDS = 300
 # Non-favorite models are checked less often than favorites to keep
 # upstream API volume reasonable, but not so long that the dashboard
@@ -55,6 +70,15 @@ async def get_int_setting(
     if maximum is not None:
         return max(minimum, min(parsed, maximum))
     return max(minimum, parsed)
+
+
+async def get_bool_setting(session: AsyncSession, key: str, default: bool) -> bool:
+    """Read a boolean setting. Accepts "true"/"1"/"yes"/"on" (case-insensitive)
+    as True; anything else as False. Missing key returns ``default``."""
+    value = await get_setting(session, key)
+    if value is None:
+        return default
+    return value.strip().lower() in ("true", "1", "yes", "on")
 
 
 async def upsert_settings(session: AsyncSession, items: dict[str, str]) -> list[Setting]:

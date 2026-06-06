@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.scheduler import sync_jobs_for_provider
+from app.core.sse import get_sse
 from app.db.session import get_session
 from app.schemas.api import ApiResponse, ModelOut, ModelPatch
 from app.services import models as models_svc
@@ -25,4 +26,10 @@ async def patch(
     # enabled/disabled toggling affects job set - need to get provider UUID
     provider = m.provider
     await sync_jobs_for_provider(provider.uuid_id)
+    # is_favorite / enabled flips need to reach other dashboard tabs
+    # without a full poll cycle. See frontend/src/hooks/useDashboard.ts.
+    await get_sse().broadcast(
+        "model.updated",
+        {"provider_id": str(provider.uuid_id), "model_id": str(m.uuid_id), "change": "patched"},
+    )
     return ApiResponse(data=ModelOut.model_validate(m))

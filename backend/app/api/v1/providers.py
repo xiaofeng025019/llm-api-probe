@@ -13,6 +13,7 @@ from app.core.scheduler import (
     sync_jobs_for_provider,
     trigger_provider_now,
 )
+from app.core.sse import get_sse
 from app.db.models import ModelType, ProbeTarget, ProviderKind
 from app.db.session import get_session
 from app.probers import get_prober
@@ -54,6 +55,10 @@ async def create_(body: ProviderCreate, session: AsyncSession = Depends(get_sess
         )
     p = await providers_svc.create_provider(session, body)
     await sync_jobs_for_provider(p.uuid_id)
+    # Notify SSE subscribers so the dashboard refreshes without
+    # waiting for the next 30s poll. See frontend/src/hooks/useDashboard.ts —
+    # `provider.updated` is one of the events that triggers a fast-tier refresh.
+    await get_sse().broadcast("provider.updated", {"provider_id": str(p.uuid_id), "change": "created"})
     return ApiResponse(data=ProviderOut.model_validate(p))
 
 
@@ -92,6 +97,7 @@ async def patch(
     if p is None:
         raise HTTPException(status_code=404, detail="provider not found")
     await sync_jobs_for_provider(provider_id)
+    await get_sse().broadcast("provider.updated", {"provider_id": str(provider_id), "change": "patched"})
     return ApiResponse(data=ProviderOut.model_validate(p))
 
 
@@ -100,6 +106,7 @@ async def delete(provider_id: uuid.UUID, session: AsyncSession = Depends(get_ses
     if not await providers_svc.delete_provider(session, provider_id):
         raise HTTPException(status_code=404, detail="provider not found")
     await sync_jobs_for_provider(provider_id)  # will remove all jobs for this provider
+    await get_sse().broadcast("provider.updated", {"provider_id": str(provider_id), "change": "deleted"})
     return ApiResponse(data={"deleted": str(provider_id)})
 
 
@@ -125,6 +132,11 @@ async def sync_models(provider_id: uuid.UUID, session: AsyncSession = Depends(ge
         await models_svc.upsert_discovered(session, provider_id, outcome.models)
         await sync_jobs_for_provider(provider_id)
     models = await models_svc.list_models(session, provider_id)
+    # sync-models can add/remove models, so the dashboard's model
+    # counts and the ProviderDetail's model grid both need to know.
+    await get_sse().broadcast(
+        "model.updated", {"provider_id": str(provider_id), "change": "synced", "count": len(models)}
+    )
     return ApiResponse(data=[ModelOut.model_validate(m) for m in models])
 
 
@@ -153,6 +165,7 @@ async def add_model(
         raise HTTPException(status_code=400, detail="model_id is required")
     # Check for duplicates (active or soft-deleted)
     from sqlalchemy import select
+
     from app.db.models import Model
 
     existing = await session.scalar(
@@ -177,11 +190,29 @@ async def add_model(
     await session.refresh(m)
     # Re-sync jobs so the new model gets a probe schedule
     await sync_jobs_for_provider(provider_id)
+    await get_sse().broadcast(
+        "model.updated", {"provider_id": str(provider_id), "model_id": str(m.uuid_id), "change": "added"}
+    )
     return ApiResponse(data=ModelOut.model_validate(m))
 
 
 @router.post("/{provider_id}/run", response_model=ApiResponse)
 async def run_now(provider_id: uuid.UUID, session: AsyncSession = Depends(get_session)) -> ApiResponse:
+    """Schedule a probe for **every** enabled model under this provider.
+
+    Provider-grained convenience endpoint — the dashboard's per-card
+    "Check model status" button uses this. For **single-model**
+    probing the frontend calls ``POST /probe/run?provider_id=…&model_id=…``
+    instead (see ``app.api.v1.dashboard.probe_run``). Both endpoints
+    exist on purpose:
+
+    * ``/providers/{id}/run`` — provider-wide, REST-y URL, no query string
+    * ``/probe/run`` — model-grained, takes ``model_id`` to single out one
+      probe; also accepts a bare ``provider_id`` for backward compat
+
+    Don't quietly fold one into the other; the URL shape is part of the
+    public surface and the React calls hard-code these paths.
+    """
     p = await providers_svc.get_provider(session, provider_id)
     if p is None:
         raise HTTPException(status_code=404, detail="provider not found")

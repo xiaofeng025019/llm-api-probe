@@ -9,18 +9,24 @@
 - **Provider name editable**: Edit dialog no longer locks the name field.
 - **Probe target filtering**: `chat_completion` probes only run on `chat` and `vision` models; `image`/`audio`/`embedding` models are skipped (they don't support the chat completions endpoint).
 - **Sync-models records ProbeResult**: The `sync-models` endpoint now persists the `list_models` outcome so the dashboard sees fresh status immediately.
+- **Loguru-based logging** with rotating file sink (`data/app.log`, 10 MB × 5 keep) per the original spec, plus stdout. `InterceptHandler` forwards all stdlib `logging` records and uvicorn's three named loggers so existing `log.info()` calls keep working unchanged.
+- **SSE `provider.updated` / `model.updated` broadcasts**: previously the frontend subscribed to these events but the backend never emitted them; provider/model PATCH, POST, DELETE, and `/sync-models` now broadcast so the dashboard refreshes within ~500 ms without waiting for the 30-second poll.
 
 ### 🔧 Changed
 - **Removed local synthetic `rate_limit`**: The scheduler no longer manufactures fake `rate_limit` errors when the per-provider sliding-window limit is hit; it simply skips the probe. Only upstream-returned 429s are recorded.
 - **URL builder deduplicates `/v1`**: `_make_url()` avoids double `/v1` when `base_url` already ends with it (e.g. `https://api.minimaxi.com/v1`).
+- **`ProviderDialog` extracted to `components/ProviderDialog.tsx`**; the obsolete `ProvidersPage` (redirect-only since 2026-06-04) was deleted. The `/providers` route still redirects to `/` for backward-compatibility with bookmarks.
+- **Settings split documented**: `app/core/config.py` (bootstrap env) and `app/services/settings.py` (runtime DB tunables) now carry mirror docstrings explaining which layer to use for new values.
+- **Probe-trigger endpoints documented**: `POST /probe/run` and `POST /providers/{id}/run` now have cross-referencing docstrings clarifying the per-model vs provider-wide split; behavior unchanged.
 
 ### 🐛 Fixed
 - **MiniMax chat probes 404**: Fixed `base_url` double `/v1` causing all MiniMax chat probes to hit a non-existent endpoint.
 - **Dashboard stale `list_models` status**: After clicking "Sync models" the dashboard now reflects the latest result instead of an old failure.
 - **SSE broadcast skips empty subscribers**: `SseManager.broadcast()` short-circuits when there are no connected clients.
+- **Docker port mismatch**: `Dockerfile.backend` hard-coded `--port 8000`, ignoring `docker-compose.yml`'s `APP_PORT=6200`; the published 127.0.0.1:6200 mapping landed on a dead port. CMD now reads `${APP_HOST}` / `${APP_PORT}` from env.
 
 ### 📊 Test coverage
-- **90** backend tests (pytest)
+- **104** backend tests (pytest) — adds `test_logging.py` (3 tests covering idempotent setup, stdlib→loguru bridge, and uvicorn handler clearing).
 
 ---
 

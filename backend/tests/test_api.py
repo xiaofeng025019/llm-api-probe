@@ -501,6 +501,87 @@ async def test_hard_delete_model_preserves_probe_results(api_client: httpx.Async
         assert pr_check.model_uuid_at_probe == m_uuid, "uuid snapshot should be preserved"
 
 
+@pytest.mark.asyncio
+async def test_hard_delete_provider_preserves_probe_results(api_client: httpx.AsyncClient) -> None:
+    """Sibling of test_hard_delete_model_preserves_probe_results — when
+    a provider row is hard-deleted (raw SQL bypassing the ORM cascade),
+    its probe_results must survive with provider_id NULL and the
+    provider_uuid_at_probe snapshot intact.
+
+    This guards the cascade=SET NULL on probe_results.provider_id (vs
+    the original CASCADE) so historical reporting / error history
+    rows aren't silently lost when a user removes a provider.
+
+    Hard delete (vs the API's soft-delete) is what we test here because
+    soft-delete by definition keeps the row and the FK valid; the
+    cascade behaviour only matters when the row actually disappears
+    (manual DB cleanup, future hard-delete path, or test fixtures).
+    """
+    import sqlalchemy as sa
+    from sqlalchemy import select
+    from app.db.models import Model, ProbeResult, Provider, ProbeTarget
+    from app.db.session import get_session_maker
+
+    sm = get_session_maker()
+    async with sm() as session:
+        p = Provider(
+            name="provider-cascade-test",
+            kind="openai",
+            base_url="https://y",
+            api_key="k",
+        )
+        session.add(p)
+        await session.commit()
+        await session.refresh(p)
+
+        m = Model(provider_id=p.id, model_id="gpt-4o")
+        session.add(m)
+        await session.commit()
+        await session.refresh(m)
+
+        pr = ProbeResult(
+            provider_id=p.id,
+            model_id=m.id,
+            target=ProbeTarget.chat_completion,
+            success=True,
+            http_status=200,
+            latency_ms=100,
+            provider_name_at_probe=p.name,
+            model_id_at_probe=m.model_id,
+            provider_uuid_at_probe=p.uuid_id,
+            model_uuid_at_probe=m.uuid_id,
+        )
+        session.add(pr)
+        await session.commit()
+        await session.refresh(pr)
+
+        p_id_int = p.id
+        p_uuid = p.uuid_id
+
+        # Hard-delete provider via raw SQL. Note: deleting the provider
+        # row cascades to the model row (models.provider_id ON DELETE
+        # CASCADE), which then triggers SET NULL on probe_results.model_id.
+        # Independently, probe_results.provider_id is SET NULL by the
+        # provider-side FK. So both FKs should end up NULL while the UUID
+        # snapshots survive — that's the contract.
+        await session.execute(sa.text("PRAGMA foreign_keys = ON"))
+        await session.execute(
+            sa.text("DELETE FROM providers WHERE id = :id"),
+            {"id": p_id_int},
+        )
+        await session.commit()
+
+        pr_check = (await session.execute(
+            select(ProbeResult).where(
+                ProbeResult.provider_uuid_at_probe == p_uuid
+            ).execution_options(populate_existing=True)
+        )).scalar_one_or_none()
+        assert pr_check is not None, "probe_result should survive provider hard-delete"
+        assert pr_check.provider_id is None, "provider_id FK should be SET NULL"
+        assert pr_check.model_id is None, "model_id FK should be SET NULL via the cascaded model delete"
+        assert pr_check.provider_uuid_at_probe == p_uuid, "provider uuid snapshot preserved"
+
+
 # ---------- dashboard + probe.run ------------------------------------------
 
 

@@ -31,9 +31,9 @@ export function useDashboard(
   //    favorites with latency/error info, which is what the
   //    dashboard cards actually need.
   //  - slow tier: per-provider model lists. 1 request per provider.
-  //    The ProvidersPage is the only consumer of modelsByProvider
-  //    and it only uses model_id / is_favorite / status — fields
-  //    that change at human, not burst, speed.
+  //    Consumed by ModelsPage (Favorite Models grid). Previously also
+  //    by ProvidersPage, deleted 2026-06-06. Fields used (model_id /
+  //    is_favorite / status) change at human, not burst, speed.
   //
   // SSE-driven refresh only fires the fast tier. Slow tier runs
   // on mount, on explicit refresh() calls, and on a slow interval.

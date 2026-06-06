@@ -396,6 +396,8 @@ const zh = {
       defaultTimeout: "默认超时（秒）",
       maxConcurrency: "全局最大并发探测数",
       retentionDays: "历史结果保留天数",
+      adaptiveBackoff: "自适应间隔——稳定模型自动降频（true/false）",
+      idleThrottle: "空闲降频——无人查看时降至 5× 间隔（true/false）",
     },
   },
 };

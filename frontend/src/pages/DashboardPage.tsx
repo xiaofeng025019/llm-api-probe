@@ -29,7 +29,7 @@ import {
 } from "../components/Icons";
 import { Skeleton, SkeletonProviderCard, SkeletonStat } from "../components/Skeleton";
 import { pushToast } from "../components/Toast";
-import { ProviderDialog } from "./ProvidersPage";
+import { ProviderDialog } from "../components/ProviderDialog";
 import { useT } from "../hooks/useT";
 import { t as i18nT } from "../lib/i18n";
 

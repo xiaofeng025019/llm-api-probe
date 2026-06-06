@@ -13,16 +13,26 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from app.api.v1 import api_router
-from app.core.config import get_settings
-from app.core.http import aclose_client
-from app.core.scheduler import (
+# Loguru must be configured before any other app module emits a log
+# line, otherwise those records hit the stdlib defaults and never
+# reach the rotating file sink. configure_logging() is idempotent so
+# it's safe to call again from lifespan if a test spins us up twice.
+from app.core.logging import configure_logging
+
+configure_logging()
+
+from app.api.v1 import api_router  # noqa: E402
+from app.core.config import get_settings  # noqa: E402
+from app.core.http import aclose_client  # noqa: E402
+from app.core.scheduler import (  # noqa: E402
     daily_cleanup,
     get_scheduler,
+    init_sse_hooks,
     sync_all_jobs,
+    trigger_all_models_now,
 )
-from app.db import init_db
-from app.db.session import get_session_maker
+from app.db import init_db  # noqa: E402
+from app.db.session import get_session_maker  # noqa: E402
 
 log = logging.getLogger(__name__)
 
@@ -46,6 +56,29 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     if not sched.running:
         sched.start()
     await sync_all_jobs()
+
+    # Install the SSE wake/sleep hooks so opening/closing the dashboard
+    # triggers a full sweep / drops cadence respectively. See
+    # app/core/scheduler.py:_on_sse_wake / _on_sse_sleep for behaviour.
+    init_sse_hooks()
+
+    # Catch-up probe on startup: if the process has been down (laptop
+    # sleep, redeploy, crash + restart) for longer than a probe interval,
+    # the dashboard would show data hours stale until the per-model
+    # schedule catches up. Trigger one immediate probe-all so the user
+    # sees fresh signal within seconds of the API coming up. Runs in
+    # the background so it doesn't block startup; logs but never
+    # crashes the lifespan handler.
+    import asyncio as _asyncio
+
+    async def _startup_probe_all() -> None:
+        try:
+            scheduled, skipped = await trigger_all_models_now()
+            log.info("startup catch-up probe: scheduled=%d skipped=%d", scheduled, skipped)
+        except Exception:
+            log.exception("startup catch-up probe failed")
+
+    _asyncio.create_task(_startup_probe_all())
 
     # If the database already has obvious test-data providers (from prior
     # manual curl-ing or scratch work), surface a one-line warning at boot so

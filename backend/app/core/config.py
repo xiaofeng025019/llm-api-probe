@@ -33,6 +33,33 @@ def _resolve_frontend_dist() -> Path:
 
 
 class Settings(BaseSettings):
+    """Bootstrap-tier configuration loaded once at process start.
+
+    There are **two** config layers in this app; both are real, and the
+    split is intentional. Be deliberate about where new values land:
+
+    * ``Settings`` (this class) — **bootstrap-only**. Read once at import
+      time from environment / ``.env``. Values that the running process
+      can't reasonably change without a restart go here: bind host/port,
+      database URL, data directory, frontend-dist path, timezone,
+      ``max_concurrency`` (APScheduler executor pool size, baked in at
+      scheduler-construction time). Changing any of these means
+      restarting the process.
+
+    * ``app.services.settings`` (the ``Setting`` DB table) — **runtime
+      tunables**. Read on each request, written from the Settings page.
+      Probe intervals, failure-confirmation thresholds, per-provider
+      rate limit, the adaptive-backoff / idle-throttle toggles all live
+      here so the operator can flip them while the dashboard is open.
+
+    Three keys appear in *both* (``default_interval_seconds``,
+    ``default_timeout_seconds``, ``retention_days``): the ``Settings``
+    value is the **fall-back default** used only when the DB has no row
+    for that key — i.e. the env file primes the table on first launch,
+    and the DB takes over once the operator saves anything. Don't add
+    new dual-write keys without a stronger reason.
+    """
+
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     app_host: str = "127.0.0.1"

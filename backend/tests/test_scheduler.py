@@ -24,6 +24,27 @@ from app.services import providers as providers_svc
 from app.services import settings as settings_svc
 
 
+@pytest.fixture(autouse=True)
+def _reset_scheduler_state():
+    """Per-test cleanup of in-memory scheduler state.
+
+    Without this, the adaptive-backoff streak dict and SSE lifecycle
+    callbacks leak between tests in this module — a test that bumps a
+    streak would skew the timing assertions in a later test, and a
+    sync_jobs test that registered hooks would leave them installed
+    for unrelated tests in this module."""
+    from app.core import scheduler as sched_mod
+    from app.core.sse import get_sse
+
+    sched_mod._model_success_streak.clear()
+    sched_mod._adaptive_backoff_enabled = True
+    sched_mod._idle_throttle_enabled = True
+    get_sse().set_lifecycle_hooks(None, None)
+    yield
+    sched_mod._model_success_streak.clear()
+    get_sse().set_lifecycle_hooks(None, None)
+
+
 @pytest.fixture
 async def env():
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
@@ -242,3 +263,187 @@ def test_provider_rate_limit_per_provider_isolation() -> None:
 
     _provider_rate_buckets.pop(a, None)
     _provider_rate_buckets.pop(b, None)
+
+
+# ---------- adaptive backoff + idle throttling -----------------------------
+
+
+def test_backoff_multiplier_curve() -> None:
+    """The tier picker must match the documented curve: 1× under 3
+    streak, 2× through 9, 4× through 29, 8× at 30+ (capped)."""
+    from app.core.scheduler import _backoff_multiplier
+
+    # Tier 1 (1×)
+    assert _backoff_multiplier(0) == 1
+    assert _backoff_multiplier(2) == 1
+    # Tier 2 (2×)
+    assert _backoff_multiplier(3) == 2
+    assert _backoff_multiplier(9) == 2
+    # Tier 3 (4×)
+    assert _backoff_multiplier(10) == 4
+    assert _backoff_multiplier(29) == 4
+    # Tier 4 (8×, capped)
+    assert _backoff_multiplier(30) == 8
+    assert _backoff_multiplier(100) == 8
+    assert _backoff_multiplier(10_000) == 8
+
+
+@pytest.mark.asyncio
+async def test_run_probe_increments_streak_on_success(env) -> None:
+    """A successful chat probe must bump the model's success streak by 1."""
+    from app.core import scheduler as sched_mod
+
+    async with env["sm"]() as s:
+        ms = await models_svc.upsert_discovered(
+            s, env["provider_id"], [DiscoveredModel(model_id="gpt-4o")]
+        )
+        await s.commit()
+        model_uuid = ms[0].uuid_id
+
+    assert sched_mod._model_success_streak.get(model_uuid, 0) == 0
+
+    with respx.mock:
+        respx.post("https://api.example.com/v1/chat/completions").mock(
+            return_value=httpx.Response(
+                200,
+                json={"choices": [{"message": {"content": "ok"}}]},
+            )
+        )
+        await _run_probe(
+            env["provider_id"], model_uuid, ProbeTarget.chat_completion, env["sm"]
+        )
+
+    assert sched_mod._model_success_streak.get(model_uuid, 0) == 1
+
+
+@pytest.mark.asyncio
+async def test_run_probe_resets_streak_on_failure(env) -> None:
+    """A failed chat probe must snap the streak back to 0 (key removed),
+    even if it was high before."""
+    from app.core import scheduler as sched_mod
+
+    async with env["sm"]() as s:
+        ms = await models_svc.upsert_discovered(
+            s, env["provider_id"], [DiscoveredModel(model_id="gpt-4o")]
+        )
+        await s.commit()
+        model_uuid = ms[0].uuid_id
+
+    # Pretend this model had a long success streak going.
+    sched_mod._model_success_streak[model_uuid] = 25
+    assert sched_mod._backoff_multiplier(25) == 4
+
+    with respx.mock:
+        respx.post("https://api.example.com/v1/chat/completions").mock(
+            side_effect=httpx.ConnectTimeout("slow")
+        )
+        await _run_probe(
+            env["provider_id"], model_uuid, ProbeTarget.chat_completion, env["sm"]
+        )
+
+    # Key removed on failure → next backoff is 1× (base interval).
+    assert model_uuid not in sched_mod._model_success_streak
+    assert sched_mod._backoff_multiplier(
+        sched_mod._model_success_streak.get(model_uuid, 0)
+    ) == 1
+
+
+def test_idle_multiplier_zero_subscribers() -> None:
+    """With no SSE subscribers, the idle multiplier kicks in at 5×."""
+    from app.core import scheduler as sched_mod
+    from app.core.sse import get_sse
+
+    # Ensure no subscribers and the toggle is on
+    assert get_sse().active_subscribers() == 0
+    sched_mod._idle_throttle_enabled = True
+    assert sched_mod._idle_multiplier() == sched_mod.IDLE_MULTIPLIER
+
+
+def test_idle_multiplier_disabled_toggle() -> None:
+    """When the idle_throttle_enabled toggle is OFF, the multiplier is
+    always 1 regardless of subscriber count."""
+    from app.core import scheduler as sched_mod
+
+    sched_mod._idle_throttle_enabled = False
+    assert sched_mod._idle_multiplier() == 1
+
+
+@pytest.mark.asyncio
+async def test_idle_multiplier_with_subscriber() -> None:
+    """Once at least one SSE client subscribes, the multiplier drops to 1×."""
+    from app.core import scheduler as sched_mod
+    from app.core.sse import get_sse
+
+    sse = get_sse()
+    q = await sse.subscribe()
+    try:
+        sched_mod._idle_throttle_enabled = True
+        assert sse.active_subscribers() == 1
+        assert sched_mod._idle_multiplier() == 1
+    finally:
+        await sse.unsubscribe(q)
+
+
+@pytest.mark.asyncio
+async def test_sse_wake_hook_fires_on_first_subscriber() -> None:
+    """0→1 transition must invoke the on_first_subscriber callback;
+    1→0 must invoke on_last_unsubscribe. Repeat subscribers must NOT
+    re-trigger the wake."""
+    from app.core.sse import SseManager
+
+    sse = SseManager()
+    wakes = 0
+    sleeps = 0
+
+    def _wake() -> None:
+        nonlocal wakes
+        wakes += 1
+
+    def _sleep() -> None:
+        nonlocal sleeps
+        sleeps += 1
+
+    sse.set_lifecycle_hooks(on_first_subscriber=_wake, on_last_unsubscribe=_sleep)
+
+    q1 = await sse.subscribe()
+    assert wakes == 1 and sleeps == 0
+    q2 = await sse.subscribe()  # 1→2, no extra wake
+    assert wakes == 1
+    await sse.unsubscribe(q1)  # 2→1, not the last yet
+    assert sleeps == 0
+    await sse.unsubscribe(q2)  # 1→0
+    assert sleeps == 1
+    # Re-subscribe → wake fires again
+    q3 = await sse.subscribe()
+    assert wakes == 2
+    await sse.unsubscribe(q3)
+
+
+def test_get_bool_setting_parses_truthy_values() -> None:
+    """Sanity check on the new boolean settings helper —
+    accepted truthy strings and the unset/default fallback."""
+    # Pure function test; spin up a tiny in-memory engine
+    import asyncio
+
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    from app.db.session import Base as _Base
+
+    async def _run() -> None:
+        engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        async with engine.begin() as conn:
+            await conn.run_sync(_Base.metadata.create_all)
+        sm = async_sessionmaker(engine, expire_on_commit=False)
+        async with sm() as s:
+            # No row present → default returned
+            assert await settings_svc.get_bool_setting(s, "x", True) is True
+            assert await settings_svc.get_bool_setting(s, "x", False) is False
+            # Set various truthy strings
+            for v in ("true", "TRUE", "1", "yes", "on", "True"):
+                await settings_svc.upsert_settings(s, {"x": v})
+                assert await settings_svc.get_bool_setting(s, "x", False) is True
+            for v in ("false", "0", "no", "off", "", "garbage"):
+                await settings_svc.upsert_settings(s, {"x": v})
+                assert await settings_svc.get_bool_setting(s, "x", True) is False
+
+    asyncio.run(_run())

@@ -395,6 +395,8 @@ const en = {
       defaultTimeout: "Default per-probe timeout (s)",
       maxConcurrency: "Max concurrent probes (global)",
       retentionDays: "Days to keep historical probe results",
+      adaptiveBackoff: "Adaptive interval — slow down probing on stable models (true/false)",
+      idleThrottle: "Idle throttle — 5× interval when the dashboard is closed (true/false)",
     },
   },
 };

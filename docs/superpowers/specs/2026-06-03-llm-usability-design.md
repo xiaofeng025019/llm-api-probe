@@ -2,12 +2,12 @@
 
 **日期**：2026-06-03
 **项目目录**：`/home/test/xf_ws/llm_usability`
-**状态**：已实现（62 tests, mypy + ruff clean）
+**状态**：已实现（2026-06-06 时 101 tests, ruff clean）
 
-> 以下为原始设计稿。实际实现在此基础上有以下差异：
-> - Dashboard 卡片从 5 张合并为 3 张：OK/Failing 合并为 "Available Models"（含进度条），Favorite Models 含 24h delta
-> - 导入/导出总是含 api_key（去掉了 `?include_keys` toggle），导出含 favorites_by_provider
-> - 2 个 alembic 迁移：`4a7be4f2d8b0` (initial) + `6fe570e1adbe` (UTC default)
+> **此文档是 2026-06-03 的原始设计稿。**
+> 实现在三天内有大量演进，全部增量见文末 **附录 A：实现演进（2026-06-03 → 2026-06-06）**。
+> 数据模型、调度器、REST 表、前端结构、SSE 等都已与本节描述偏离；以附录 A 为准。
+> 文中的旧"实现差异"提示行（dashboard 卡片合并、include_keys 取消、迁移数）已被附录 A 覆盖。
 
 ## 1. 目标与范围
 
@@ -401,3 +401,219 @@ TZ=Asia/Shanghai
 - 分布式 worker
 - 调用重路由
 - 移动端
+
+---
+
+# 附录 A：实现演进（2026-06-03 → 2026-06-06）
+
+> 写于 2026-06-06。本附录覆盖原 §1–§13 中所有与现状不符的部分；
+> 当 §1–§13 与本附录冲突时，**以本附录为准**。
+> 列表里的每条都标了实际所在的源文件，便于追踪。
+
+## A.1 数据模型补充
+
+### Provider（`app/db/models.py:59`）
+新增字段：
+- `uuid_id: UUID(unique, indexed)` —— **对外 API 统一暴露的稳定 ID**。`id`（int PK）仅做内部 FK。
+- `deleted_at: datetime | null` —— 软删除标记。
+- `name` 索引改为 `partial unique where deleted_at IS NULL` —— 软删后允许同名复用。
+
+### Model（`app/db/models.py:85`）
+新增字段（**全部不在原 §4 内**）：
+- `uuid_id`、`deleted_at` —— 同 Provider。
+- `is_favorite: bool` —— 收藏标记。原 §4 把 favorite 放在 spec 文字里但缺字段。
+- `status: str(40), default "unknown"` —— 当前可达状态（online/suspect/offline/disabled/…）。
+- `status_reason: str(300) | null` —— 例如 "auth"、"rate_limit"。
+- `status_checked_at: datetime | null` —— 最近一次状态检查时间。
+- `status_confirmed_at: datetime | null` —— 状态被**确认**为 offline 的时间（基于连续失败次数）。
+- `last_success_at: datetime | null` —— 最近成功探测。
+- `consecutive_failures: int, default 0` —— 用于"连续 N 次失败才标 offline"的确认窗口（favorite N=2，regular N=3，见 A.6）。
+
+### ProbeResult（`app/db/models.py:117`）
+新增字段：
+- `uuid_id` —— 对外 ID。
+- `ttfb_ms: int | null` —— 流式探测的首字节延迟，**原 §4 漏列**。
+- `pinned: bool, default False` —— 错误"钉住"标记，逃过保留期清理（见 A.4 errors 端点）。
+- **快照字段（snapshot at probe time）**：
+  - `provider_name_at_probe: str`
+  - `model_id_at_probe: str | null`
+  - `provider_uuid_at_probe: UUID`
+  - `model_uuid_at_probe: UUID | null`
+- FK 变更：`provider_id` 和 `model_id` 从 `ON DELETE CASCADE` 改为 `SET NULL`，**保证 provider/model 硬删后历史结果仍可读**（依赖上面的 UUID/字符串快照定位归属）。
+- 索引新增：`ix_probe_results_provider_uuid_at_probe`、`ix_probe_results_model_uuid_at_probe`、`ix_probe_results_pinned_checked_at`。
+- 两个 `@property`：`provider_uuid`、`model_uuid` —— 优先取活 FK，回落到快照。
+
+### 不变
+- `Setting`、`JobState` 表与原 §4 一致。
+- `ErrorCode`、`ProbeTarget`、`ProviderKind` 枚举一致。
+
+## A.2 Alembic 迁移：实际 8 条（不是 2 条）
+
+按 down_revision 链顺序（`backend/alembic/versions/`）：
+
+1. `4a7be4f2d8b0_initial_schema` —— 初始化所有表。
+2. `0158e57e3489_add_uuid_snapshot_softdelete_fields` —— Provider / Model 加 `uuid_id` + `deleted_at`；ProbeResult 加 `uuid_id` + 字符串快照。
+3. `7ad1aec504b8_add_partial_unique_index_on_provider_name` —— providers.name → 部分唯一索引。
+4. `b6f1c2d4a9e1_add_model_status_confirmation_fields` —— Model 加 status*/last_success_at/consecutive_failures。
+5. `c9a5e4d7b2f0_backfill_missing_probe_result_uuids` —— 数据迁移：旧行回填 uuid_id。
+6. `d4f8a2c6b1e3_add_probe_result_uuid_snapshots` —— ProbeResult 加 UUID 快照列 + 索引。
+7. `e1f3a7b2c594_probe_results_provider_nullable_set_null` —— FK CASCADE → SET NULL（SQLite 表重建）。
+8. `c4f7e1a9b3d2_add_probe_result_pinned` —— 加 `pinned` 列 + 索引。
+
+## A.3 Probers 演进
+
+注册表 4 个 kind 没变（`app/probers/__init__.py:14`），但：
+- **MiniMax 静态 fallback**（`openai_base.py:28-33` + `:107-117`）：当 `GET /v1/models` 非 200 且 host 命中 `minimaxi.com`，注入硬编码模型列表（`MiniMax-M3`、`MiniMax-M2.1`），避免 MiniMax 不提供 `/v1/models` 时 dashboard 空空如也。
+- **URL 去重**（`openai_base.py` 中的 `_make_url`）：当 `base_url` 本身已以 `/v1` 结尾，不再重复拼。修了之前一次 MiniMax base_url 配错的真实事故。
+- **模型类型推断**集中在 `app/probers/model_classify.py`，按 model_id 关键词分类。
+
+## A.4 REST API：实际端点
+
+`/api/v1` 前缀。**加粗为原 §7 未列**。
+
+### `/providers`（`app/api/v1/providers.py`）
+
+| 方法 | 路径 |
+|---|---|
+| GET | `/providers` |
+| POST | `/providers` —— 同名 + (base_url, api_key) 双重去重；409 |
+| GET | `/providers/{provider_id}` |
+| PATCH | `/providers/{provider_id}` |
+| DELETE | `/providers/{provider_id}` —— 软删 |
+| POST | `/providers/{provider_id}/sync-models` —— 同时调 `record_outcome` 反映到 dashboard |
+| GET | `/providers/{provider_id}/models` |
+| **POST** | **`/providers/{provider_id}/models`** —— 手工添加（list_models 不可用时的兜底） |
+| **POST** | **`/providers/{provider_id}/run`** —— 单 provider 立即重测 |
+
+### `/models`（`app/api/v1/models.py`）
+
+| 方法 | 路径 |
+|---|---|
+| PATCH | `/models/{model_id}` |
+
+### 其他（`app/api/v1/dashboard.py`）
+
+| 方法 | 路径 |
+|---|---|
+| GET | `/dashboard` |
+| GET | `/results` |
+| GET | `/settings` |
+| PUT | `/settings` —— 写后调 `sync_all_jobs()` |
+| POST | `/import` |
+| POST | `/export` —— **总是含 api_key**（去掉了原 spec 的 `?include_keys` 开关） |
+| POST | `/probe/run` |
+| **POST** | **`/probe/run-all`** —— 全量立即重测（dashboard "刷新全部" 按钮）|
+| **GET** | **`/errors`** —— 最近失败列表（含 pinned 在顶）|
+| **POST** | **`/errors/{probe_uuid}/pin`** |
+| **DELETE** | **`/errors/{probe_uuid}/pin`** |
+| GET | `/events` —— SSE |
+
+### Health（`app/main.py`）
+- `GET /api/v1/healthz`
+- **`GET /api/v1/readyz`** —— scheduler 是否在跑
+
+## A.5 SSE 实际事件
+
+原 §7 列了 4 种，**真正 broadcast 的只有 2 种**（`app/core/scheduler.py:434, 450`）：
+
+| 事件 | 触发 | payload |
+|---|---|---|
+| `probe.completed` | 每次探测结束 | id, provider_id, model_id, target, success, http_status, latency_ms, ttfb_ms, error_code, checked_at |
+| `job.error` | **仅** model.is_favorite 且失败 | provider_id/name, model_id/name, model_is_favorite, error_code, message |
+
+外加：
+- 25s 心跳 `: ping`（dashboard.py:380）
+- `SseManager.active_subscribers()` + 0↔1 lifecycle hooks，被调度器拿来做"空闲降频"（见 A.6）。
+
+`provider.updated` / `model.updated` 在前端 `useSse.ts` 已订阅但后端从未发——是死代码，需要清理或者补 broadcast。
+
+## A.6 设置（Setting 表）：重新设计
+
+原 §4 / §7 提到 `retention_days / default_interval / max_concurrency` 应该写在 Setting 表。**实际上这三个仍由 `app/core/config.py` 的环境变量管**；DB Setting 表存的是另一套更细粒度的 key（`app/services/settings.py`）：
+
+| Setting Key | 默认 | 用途 |
+|---|---|---|
+| `favorite_model_interval_seconds` | 300 | 收藏模型探测间隔（base） |
+| `regular_model_interval_seconds` | 120 | 普通模型探测间隔（base） |
+| `favorite_model_failure_confirmations` | 2 | 收藏模型连续失败几次才标 offline |
+| `regular_model_failure_confirmations` | 3 | 普通模型同上 |
+| `provider_rate_limit_per_minute` | 20 | 每 provider 滑窗速率上限（见 A.7） |
+| `adaptive_backoff_enabled` | true | 见 A.7 |
+| `idle_throttle_enabled` | true | 见 A.7 |
+
+环境变量（`config.py`）：`default_interval_seconds`、`default_timeout_seconds`、`max_concurrency`、`retention_days`、`probe_prompt`、`probe_max_tokens`、`tz` 等仍在。
+
+## A.7 调度器：相比原 §6 的大量增强
+
+原 §6 描述的"每 provider+target 一个 Job、IntervalTrigger"骨架仍在，但围绕成本控制和稳定性增加了五层机制（全部在 `app/core/scheduler.py`）：
+
+1. **每 provider 滑动窗口速率限制**（`:114, :117`）—— 内存 deque，60s 内最多 N 次（默认 20）。超出直接 return，不打上游。修了之前用户被多账号 + 频繁探测打爆配额的问题。
+
+2. **自适应退避（adaptive backoff）**（`:165–:230`）—— 内存 `_model_success_streak[model_uuid]` 累计连续成功次数；按 1×/2×/4×/8× 阶梯（streak <3 / <10 / <30 / ≥30）放大 base interval。一次失败立刻清零回 1×。开关 `adaptive_backoff_enabled`。
+
+3. **空闲降频（idle throttle）**（`:194, :259, :285, :318`）—— 通过 `SseManager.active_subscribers()` 判断 dashboard 是否有人开。无人时所有 chat 探测 ×5；0→1 转换立即触发 `trigger_all_models_now()`；1→0 把现有队列推远 ×5。开关 `idle_throttle_enabled`。两机制叠乘：稳定 + 无人 = `base × 8 × 5 = 40×`。
+
+4. **后台随机扫描（random sweep）**（`:782, :863`）—— 每 20s 选最多 3 个超过 `max(30s, eff/2)` 未探测的模型补一次。让上游流量不像精确周期任务、并让 dashboard 在刚打开时数据看起来"持续刷新"。Backoff-aware：稳定模型不会被打扰。
+
+5. **启动追赶探测**（`app/main.py:60–67`）—— `lifespan` 中 spawn 一个 `trigger_all_models_now()`，让笔记本休眠 / 容器重启后 dashboard 在数秒内有最新数据，而不是等到下个 interval。
+
+调度器同时维护：
+- 全局 `Semaphore(max_concurrency)`
+- 每 provider `Semaphore(1)`（同 provider 探测顺序化）
+- 每个新 job 首跑 `next_run_time=now`，jitter=10% of interval（最小 5s）
+- `coalesce=True`、`max_instances=1`、`misfire_grace_time=interval*2`
+
+每次探测结束后会 `modify_job(next_run_time=…)` 把下一次触发时间写成 `base × backoff × idle + jitter`——这是 backoff/idle 真正生效的地方（而不是改 trigger）。
+
+## A.8 测试
+
+实际 **9 个文件 / 101 个测试**（不是 spec 提到的 62）：
+
+| 文件 | 数量 | 覆盖 |
+|---|---|---|
+| `test_services.py` | 35 | providers / models / results / settings service 层 |
+| `test_probers.py` | 19 | 三家 prober + MiniMax fallback + error mapping |
+| `test_scheduler.py` | 18 | sync_jobs、backoff、idle、rate limit、random sweep、trigger_* |
+| `test_api.py` | 18 | REST + SSE + cascade preservation |
+| `test_e2e_real_http.py` | 4 | respx 端到端流 |
+| `test_cli.py` | 4 | `app.cli` 工具 |
+| `test_db_init.py` | 2 | Alembic 初始化 |
+| `test_healthz.py` | 1 | healthz |
+
+## A.9 日志
+
+2026-06-06 之前用 stdlib `logging`（uvicorn 的 stdout 即日志，无文件落盘），与 spec §11 写的 loguru + `data/app.log` rotation 不符。**2026-06-06 已按 spec 接入 loguru**：`app/core/logging.py:configure_logging()` 在 `main.py` 顶部最先调用，安装：
+- stdout sink（彩色，匹配 uvicorn 风格）
+- 文件 sink `data/app.log`，rotation `10 MB`、retention `5`（与 spec 一致）
+- `InterceptHandler` 把 stdlib + uvicorn 三个 named logger（`uvicorn`/`uvicorn.error`/`uvicorn.access`）的记录都转进 loguru —— 所以**全部既有 `logging.getLogger(__name__).info(...)` 调用不用改**
+- data dir 不可写时 fallback 到 stdout-only，不让日志故障打挂应用
+
+测试：`test_logging.py` 三条（idempotent / root handler 单一 / uvicorn 三 logger handlers 清空且 propagate=True）。
+
+## A.10 前端：与 §8 的偏差
+
+- **新增页 ErrorsPage**（`pages/ErrorsPage.tsx`）—— 接 `GET /errors` + pin/unpin。原 §8 五页扩到六页。
+- **ProvidersPage 已删除**（2026-06-06）：路由 `/providers` 保留 redirect 到 `/`（兼容旧书签），`ProviderDialog` 已抽到 `components/ProviderDialog.tsx` 给 DashboardPage 复用。
+- **Tailwind 未使用**——改为单文件 `src/styles.css`（约 2600 行）+ CSS 变量 + `data-theme` 切换（`useTheme.ts`）。所有色彩都走 `var(--*)` 间接层。
+- **TanStack Query 未引入**——改为自写 `useDashboard` hook（`hooks/useDashboard.ts`），分快/慢两层：
+  - Fast tier（dashboard + providers + settings）每 30s 刷一次 + SSE 触发 + 500ms 防抖
+  - Slow tier（每 provider 的 models 扇出）每 5 min 刷一次
+- **i18n 完整实现**（spec 没写）：`lib/i18n.ts` + `locales/{en,zh}.ts` + `useT()` + `LanguageToggle`（globe 图标 + 下拉）。约 80 行核心代码，零依赖，typed-keys (`Key<Messages>`) 通过 mapped type 推导。详见 `frontend/src/lib/i18n.ts`。
+- **图表**用 recharts，theme-reactive：`ResultsChart.tsx` 读 `useTheme()` 切换 axis/grid 颜色。
+- **SSE**：`useSse.ts` 共享单 EventSource，指数退避重连（1s→30s cap）。订阅 `ping/probe.completed/provider.updated/model.updated/job.error`，**5 类全部后端真发**（2026-06-06 起：provider/model PATCH/POST/DELETE 都补了 broadcast）。
+- **全局 SSE 监听器** `GlobalSse`（`main.tsx:26-50`）只在 favorite 模型 `job.error` 时弹 toast。
+- **顶部导航**只有 Dashboard / Errors / Settings；`/models` 和 `/providers/:id` 走链接进入。
+
+## A.11 Docker / 部署：一个真 bug
+
+`Dockerfile.backend` 的 `CMD` 硬编码 `--port 8000`，但 `docker-compose.yml` 同时设了 `APP_PORT=6200` 且把 `127.0.0.1:6200:6200` 暴露出来——**这意味着 compose 启动后容器实际仍监听 8000，6200 端口映射打不到任何东西**。已在 2026-06-06 修复（见 commit history）：把 CMD 改为透传 `${APP_HOST}/${APP_PORT}`。
+
+## A.12 待办进度（2026-06-06 全部清理完毕）
+
+1. ✅ ~~死代码 / 未发事件~~：provider/model PATCH/POST/DELETE + sync-models 全部 broadcast `provider.updated` / `model.updated`。
+2. ✅ ~~重复 settings 来源~~：`config.py` Settings 类与 `services/settings.py` 顶端都加了对照 docstring 解释"启动期 env vs 运行期 DB"的设计。
+3. ✅ ~~`ProvidersPage` 半弃用~~：`ProviderDialog` 已抽到 `components/ProviderDialog.tsx`，`ProvidersPage` 删除，路由仍 redirect 兼容旧书签。
+4. ✅ ~~loguru 与文件 rotation~~：按 spec 接入 loguru + `data/app.log` 10MB×5 rotation（详见 §A.9）。
+5. ✅ ~~`/providers/{id}/run` vs `/probe/run` 重叠~~：两端点 docstring 互相引用，明确分工（前者 provider-wide REST，后者 model-grained query-string）。
+
+

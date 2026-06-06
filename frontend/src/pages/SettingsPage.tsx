@@ -15,6 +15,8 @@ const KNOWN_SETTINGS = [
   { key: "default_timeout_seconds", descKey: "settingsPage.setting.defaultTimeout", defaultValue: "30" },
   { key: "max_concurrency", descKey: "settingsPage.setting.maxConcurrency", defaultValue: "10" },
   { key: "retention_days", descKey: "settingsPage.setting.retentionDays", defaultValue: "30" },
+  { key: "adaptive_backoff_enabled", descKey: "settingsPage.setting.adaptiveBackoff", defaultValue: "true" },
+  { key: "idle_throttle_enabled", descKey: "settingsPage.setting.idleThrottle", defaultValue: "true" },
 ] as const;
 
 export function SettingsPage() {

@@ -8,7 +8,7 @@ import logging
 import time
 import uuid
 from collections import deque
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
@@ -138,6 +138,194 @@ def _check_provider_rate_limit(provider_uuid: uuid.UUID, limit_per_minute: int) 
     return True, 0.0
 
 
+# ---------- adaptive backoff + idle throttling ------------------------------
+#
+# Two complementary cost-saving mechanisms, both purely in-memory:
+#
+#   A) Adaptive backoff: a model that succeeds N times in a row gets
+#      probed less often (1× → 2× → 4× → 8× of its base interval).
+#      A single failure resets the streak — fast detection of new
+#      problems matters more than perfectly-smooth backoff.
+#
+#   B) Idle throttling: when no SSE subscriber is connected (nobody is
+#      watching the dashboard), all chat-completion probes use a 5×
+#      interval. The moment a subscriber connects, the multiplier
+#      snaps to 1 and a one-shot full sweep refreshes everything.
+#
+# Effective interval = base × backoff_mult × idle_mult.
+# State is reset on process restart — safer than persisting a
+# "looks-stable-yesterday" assumption across a possibly-long downtime.
+
+BACKOFF_MAX_MULTIPLIER = 8
+IDLE_MULTIPLIER = 5
+
+# Per-model success counter. Cleared on probe failure (snap to 1× tier),
+# bumped on success, popped when the model is removed from active probing
+# (see sync_jobs_for_provider's cleanup at the bottom).
+_model_success_streak: dict[uuid.UUID, int] = {}
+
+# When False, the toggle in Settings turns the multiplier off for one
+# or both mechanisms — we cache the bool on the module to avoid a DB
+# read on every probe. Refreshed in init_sse_hooks() and whenever
+# sync_jobs_for_provider is called (so a Settings save propagates
+# without restart).
+_adaptive_backoff_enabled: bool = True
+_idle_throttle_enabled: bool = True
+
+
+def _backoff_multiplier(streak: int) -> int:
+    """Map a consecutive-success count to its interval multiplier.
+
+    Curve (per design — gentle "1×→2×→4×→8×" cap at 8×):
+      streak <  3 → 1×   (base interval; recent fresh signal)
+      streak <  10 → 2×  (mildly stable)
+      streak <  30 → 4×  (very stable)
+      streak >= 30 → 8×  (rock-solid; capped here regardless of streak)
+    """
+    if streak < 3:
+        return 1
+    if streak < 10:
+        return 2
+    if streak < 30:
+        return 4
+    return BACKOFF_MAX_MULTIPLIER
+
+
+def _idle_multiplier() -> int:
+    """1 when at least one SSE subscriber is connected, ``IDLE_MULTIPLIER``
+    otherwise. Toggleable via the ``idle_throttle_enabled`` setting."""
+    if not _idle_throttle_enabled:
+        return 1
+    return 1 if get_sse().active_subscribers() > 0 else IDLE_MULTIPLIER
+
+
+def _effective_interval(model_uuid: uuid.UUID, base_interval: int) -> int:
+    """Compute the next-probe gap for a chat-completion model in seconds."""
+    backoff = (
+        _backoff_multiplier(_model_success_streak.get(model_uuid, 0))
+        if _adaptive_backoff_enabled
+        else 1
+    )
+    return base_interval * backoff * _idle_multiplier()
+
+
+def _bump_streak(model_uuid: uuid.UUID, success: bool) -> None:
+    """Update success streak after a probe result. Snap to 0 on failure
+    (back to 1× base interval); +1 on success. Logs only on tier crossings
+    so probe logs don't get noisy."""
+    if success:
+        prev = _model_success_streak.get(model_uuid, 0)
+        new = prev + 1
+        _model_success_streak[model_uuid] = new
+        if _backoff_multiplier(prev) != _backoff_multiplier(new):
+            log.debug(
+                "backoff tier up: model=%s streak=%d→%d mult=%dx",
+                model_uuid,
+                prev,
+                new,
+                _backoff_multiplier(new),
+            )
+    else:
+        prev = _model_success_streak.pop(model_uuid, 0)
+        if _backoff_multiplier(prev) != 1:
+            log.debug(
+                "backoff reset on failure: model=%s streak=%d→0 mult→1x",
+                model_uuid,
+                prev,
+            )
+
+
+async def _model_base_interval(session, model: Model) -> int:
+    """Resolve the base (un-multiplied) interval for a model from the
+    favorite/regular settings. Mirrors the logic in
+    ``sync_jobs_for_provider`` so post-probe reschedules use the same
+    base the trigger was originally built with."""
+    if model.is_favorite:
+        return await settings_svc.get_int_setting(
+            session,
+            settings_svc.FAVORITE_MODEL_INTERVAL_KEY,
+            settings_svc.DEFAULT_FAVORITE_MODEL_INTERVAL_SECONDS,
+        )
+    return await settings_svc.get_int_setting(
+        session,
+        settings_svc.REGULAR_MODEL_INTERVAL_KEY,
+        settings_svc.DEFAULT_REGULAR_MODEL_INTERVAL_SECONDS,
+    )
+
+
+# ---------- SSE lifecycle hooks (idle wake/sleep) ---------------------------
+
+
+def _on_sse_wake() -> None:
+    """SSE went 0→1: someone opened the dashboard. Schedule a one-shot
+    full-sweep probe so the dashboard sees fresh data within seconds
+    instead of waiting up to ``IDLE_MULTIPLIER × base_interval``."""
+    log.info("sse wake: 1 subscriber, scheduling full probe sweep")
+
+    async def _do_wake() -> None:
+        try:
+            scheduled, skipped = await trigger_all_models_now()
+            log.info(
+                "sse wake sweep: scheduled=%d skipped=%d", scheduled, skipped
+            )
+        except Exception:
+            log.exception("sse wake sweep failed")
+
+    # Fire-and-forget — the SSE handler must not block on a probe sweep.
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        # No running loop (e.g. unit test calling subscribe outside an
+        # asyncio context). Skip the sweep — the test code can drive
+        # trigger_all_models_now directly if it needs to.
+        return
+    _background_tasks.add(loop.create_task(_do_wake()))
+
+
+def _on_sse_sleep() -> None:
+    """SSE went 1→0: dashboard closed. Push every queued chat probe out
+    by ``(IDLE_MULTIPLIER−1) × current_gap`` so jobs already scheduled
+    for the next few seconds don't fire at active cadence right after
+    the user walked away.
+
+    List-models jobs are left alone — they're free on most providers
+    and keeping the model catalog fresh has no extra cost."""
+    log.info("sse idle: 0 subscribers, throttling to %dx interval", IDLE_MULTIPLIER)
+    sched = get_scheduler()
+    pushed = 0
+    now = datetime.now(UTC)
+    for job in sched.get_jobs():
+        # job ids are "p{provider_uuid}:{target}:m{model_uuid_or_-}"
+        if ":chat_completion:" not in job.id:
+            continue
+        next_run = getattr(job, "next_run_time", None)
+        if next_run is None:
+            continue
+        # Existing gap; multiply remaining gap (not absolute time-since-now)
+        # so a job already in the past stays in the past.
+        gap_seconds = (next_run - now).total_seconds()
+        if gap_seconds <= 0:
+            continue
+        new_gap = gap_seconds * IDLE_MULTIPLIER
+        new_run = now + timedelta(seconds=new_gap)
+        with contextlib.suppress(Exception):
+            sched.modify_job(job.id, next_run_time=new_run)
+            pushed += 1
+    if pushed:
+        log.info("sse idle: pushed %d chat probes further out", pushed)
+
+
+def init_sse_hooks() -> None:
+    """Wire the SSE 0↔1 transition callbacks into the scheduler.
+
+    Called once from ``main.py:lifespan``. Idempotent — re-calling it
+    just replaces the existing handlers with the same functions."""
+    get_sse().set_lifecycle_hooks(
+        on_first_subscriber=_on_sse_wake,
+        on_last_unsubscribe=_on_sse_sleep,
+    )
+
+
 async def _run_probe(
     provider_uuid: uuid.UUID,
     model_uuid: uuid.UUID | None,
@@ -186,6 +374,21 @@ async def _run_probe(
                     settings_svc.DEFAULT_PROVIDER_RATE_LIMIT_PER_MINUTE,
                     minimum=1,
                     maximum=100,
+                )
+                # Cheap: refresh the cached toggles every probe so a
+                # Settings save propagates within one probe interval.
+                # We don't gate this on dirty-ness — get_bool_setting is
+                # a single keyed read on a tiny table.
+                global _adaptive_backoff_enabled, _idle_throttle_enabled
+                _adaptive_backoff_enabled = await settings_svc.get_bool_setting(
+                    session,
+                    settings_svc.ADAPTIVE_BACKOFF_ENABLED_KEY,
+                    settings_svc.DEFAULT_ADAPTIVE_BACKOFF_ENABLED,
+                )
+                _idle_throttle_enabled = await settings_svc.get_bool_setting(
+                    session,
+                    settings_svc.IDLE_THROTTLE_ENABLED_KEY,
+                    settings_svc.DEFAULT_IDLE_THROTTLE_ENABLED,
                 )
                 allowed, retry_after = _check_provider_rate_limit(provider_uuid, rate_limit)
                 if not allowed:
@@ -266,8 +469,33 @@ async def _run_probe(
                     js = JobState(job_key=job_key)
                     session.add(js)
                 js.last_run_at = datetime.now(UTC)
-                js.last_status = "ok" if (locals().get("outcome") and outcome.success) else "fail"
+                outcome_obj = locals().get("outcome")
+                ok = bool(outcome_obj and outcome_obj.success)
+                js.last_status = "ok" if ok else "fail"
                 await session.commit()
+
+                # After every chat_completion probe, snap the success streak
+                # and reschedule the next firing via APScheduler. This is how
+                # adaptive backoff + idle throttling actually take effect —
+                # the trigger's static interval is a floor (it fires again if
+                # nothing modifies next_run_time), but the post-probe modify
+                # is what drives the dynamic multiplier curve.
+                if target == ProbeTarget.chat_completion and model_uuid is not None and model is not None:
+                    _bump_streak(model_uuid, ok)
+                    base_interval = await _model_base_interval(session, model)
+                    effective = _effective_interval(model_uuid, base_interval)
+                    # Small jitter (10% of effective, min 5s) so a batch of
+                    # post-probe reschedules from a "Refresh all" don't
+                    # land on the same instant in the future.
+                    import random as _random
+                    jitter = max(5, effective // 10)
+                    next_at = datetime.now(UTC) + timedelta(seconds=effective + _random.randint(0, jitter))
+                    with contextlib.suppress(Exception):
+                        # modify_job raises JobLookupError if the job was
+                        # removed between probe start and now (e.g. provider
+                        # deleted mid-probe). The next sync_jobs cycle
+                        # will rebuild it, so silently swallowing is fine.
+                        get_scheduler().modify_job(job_key, next_run_time=next_at)
     except Exception as e:
         log.exception("probe run outer failure: %s", e)
 
@@ -339,6 +567,10 @@ async def sync_jobs_for_provider(provider_uuid: uuid.UUID, session_maker=None) -
         for job in sched.get_jobs():
             if job.id.startswith(f"p{provider_uuid}:") and job.id not in keep:
                 sched.remove_job(job.id)
+        # Streak-dict pruning is centralised in sync_all_jobs (which has
+        # the union of all providers' active models) — doing it here
+        # would falsely drop entries for models that belong to other
+        # providers being processed in the same sync pass.
 
 
 def _upsert_job(
@@ -404,6 +636,24 @@ async def sync_all_jobs() -> None:
     # Always have the background random-sweep job running, even if
     # there are zero providers configured.
     _ensure_random_sweep_job(sched)
+
+    # Full prune of orphaned success-streak entries. After every
+    # provider has been synced, anything still in the dict whose uuid
+    # isn't a current probeable model uuid is dead weight from a
+    # previous provider/model that's gone.
+    async with sm() as session:
+        rows = (
+            await session.execute(
+                select(Model.uuid_id).where(
+                    Model.deleted_at.is_(None),
+                    Model.enabled.is_(True),
+                    Model.type.in_((ModelType.chat, ModelType.vision)),
+                )
+            )
+        ).all()
+    live_uuids = {r[0] for r in rows}
+    for stale in [u for u in list(_model_success_streak.keys()) if u not in live_uuids]:
+        _model_success_streak.pop(stale, None)
 
 
 async def trigger_now(provider_uuid: uuid.UUID, model_uuid: uuid.UUID | None, session_maker=None) -> bool:
@@ -541,16 +791,27 @@ async def _random_probe_sweep() -> None:
       rate-limit or flag perfectly-periodic probes).
     - Keeps the dashboard's "Available Models" counter fresh so
       the user doesn't need to click "Refresh all" on page open.
+
+    Backoff-aware: a model currently at high backoff (e.g. 8× because
+    it has succeeded 30 times in a row) is skipped here until the
+    matching fraction of its effective interval has elapsed —
+    otherwise the sweep would undo the cost-saving by re-probing
+    stable models every 30s.
     """
     import random
 
     sm = get_session_maker()
-    cutoff = datetime.now(UTC).timestamp() - RANDOM_SWEEP_MIN_AGE_SECONDS
+    now_ts = datetime.now(UTC).timestamp()
     async with sm() as session:
-        # Build candidate list: enabled (provider, model) pairs.
+        # Need is_favorite to compute the per-model base interval.
         rows = (
             await session.execute(
-                select(Provider.uuid_id, Model.uuid_id, Model.status_checked_at)
+                select(
+                    Provider.uuid_id,
+                    Model.uuid_id,
+                    Model.status_checked_at,
+                    Model.is_favorite,
+                )
                 .join(Model, Model.provider_id == Provider.id)
                 .where(
                     Provider.deleted_at.is_(None),
@@ -563,21 +824,40 @@ async def _random_probe_sweep() -> None:
         ).all()
         if not rows:
             return
-        # Filter: skip models probed very recently — the periodic job
-        # already covers them, no need to double up.
-        candidates: list[tuple[uuid.UUID, uuid.UUID]] = []
-        for provider_uuid, model_uuid, last_checked in rows:
-            if last_checked is None or last_checked.timestamp() <= cutoff:
-                candidates.append((provider_uuid, model_uuid))
-        if not candidates:
-            return
-        sample_size = min(RANDOM_SWEEP_PROBES_PER_TICK, len(candidates))
-        chosen = random.sample(candidates, sample_size)
-        for provider_uuid, model_uuid in chosen:
-            # trigger_now does its own enabled/deleted checks. If a
-            # model was disabled between the SELECT and the call, it
-            # just returns False and we move on.
-            await trigger_now(provider_uuid, model_uuid, session_maker=sm)
+        # Resolve the two base intervals once per tick.
+        fav_base = await settings_svc.get_int_setting(
+            session,
+            settings_svc.FAVORITE_MODEL_INTERVAL_KEY,
+            settings_svc.DEFAULT_FAVORITE_MODEL_INTERVAL_SECONDS,
+        )
+        reg_base = await settings_svc.get_int_setting(
+            session,
+            settings_svc.REGULAR_MODEL_INTERVAL_KEY,
+            settings_svc.DEFAULT_REGULAR_MODEL_INTERVAL_SECONDS,
+        )
+
+    candidates: list[tuple[uuid.UUID, uuid.UUID]] = []
+    for provider_uuid, model_uuid, last_checked, is_fav in rows:
+        # Compute this model's effective interval and require
+        # half of it to have elapsed before the sweep is allowed
+        # to touch it. Hard floor at RANDOM_SWEEP_MIN_AGE_SECONDS
+        # so a brand-new model (no checked_at) still gets probed
+        # quickly on the first sweep.
+        base = fav_base if is_fav else reg_base
+        eff = _effective_interval(model_uuid, base)
+        min_age = max(RANDOM_SWEEP_MIN_AGE_SECONDS, eff // 2)
+        age_cutoff = now_ts - min_age
+        if last_checked is None or last_checked.timestamp() <= age_cutoff:
+            candidates.append((provider_uuid, model_uuid))
+    if not candidates:
+        return
+    sample_size = min(RANDOM_SWEEP_PROBES_PER_TICK, len(candidates))
+    chosen = random.sample(candidates, sample_size)
+    for provider_uuid, model_uuid in chosen:
+        # trigger_now does its own enabled/deleted checks. If a
+        # model was disabled between the SELECT and the call, it
+        # just returns False and we move on.
+        await trigger_now(provider_uuid, model_uuid, session_maker=sm)
 
 
 def _ensure_random_sweep_job(sched: AsyncIOScheduler) -> None:

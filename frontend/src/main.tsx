@@ -78,6 +78,10 @@ function App() {
         <main id="main" tabIndex={-1}>
           <Routes>
             <Route path="/" element={<DashboardPage />} />
+            {/* /providers used to render a dedicated page; the page was
+                removed 2026-06-06 because the Dashboard already covered
+                the same surface. Keep the redirect so old bookmarks and
+                external links don't 404. */}
             <Route path="/providers" element={<Navigate to="/" replace />} />
             <Route path="/providers/:id" element={<ProviderDetailPage />} />
             <Route path="/models" element={<ModelsPage />} />
