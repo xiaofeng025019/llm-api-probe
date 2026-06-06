@@ -107,6 +107,18 @@ class ModelPatch(BaseModel):
     is_favorite: bool | None = None
 
 
+class ModelCreate(BaseModel):
+    """Body for POST /api/v1/providers/{id}/models (manual model add).
+
+    Used when the upstream does not expose a /v1/models endpoint
+    (e.g. MiniMax) so the user can still register a model for probing.
+    Field bounds match the underlying Model columns.
+    """
+    model_id: str = Field(min_length=1, max_length=300)
+    display_name: str | None = Field(default=None, max_length=300)
+    type: ModelType = ModelType.chat
+
+
 # ---------- Probe result ----------------------------------------------------
 
 

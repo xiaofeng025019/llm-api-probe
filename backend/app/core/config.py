@@ -52,12 +52,12 @@ class Settings(BaseSettings):
       rate limit, the adaptive-backoff / idle-throttle toggles all live
       here so the operator can flip them while the dashboard is open.
 
-    Three keys appear in *both* (``default_interval_seconds``,
-    ``default_timeout_seconds``, ``retention_days``): the ``Settings``
-    value is the **fall-back default** used only when the DB has no row
-    for that key — i.e. the env file primes the table on first launch,
-    and the DB takes over once the operator saves anything. Don't add
-    new dual-write keys without a stronger reason.
+    Three keys are seeded into the ``settings`` table on first launch
+    (``default_interval_seconds``, ``default_timeout_seconds``,
+    ``retention_days``) for symmetry, but the code only reads them from
+    ``Settings`` — the DB rows are vestigial. Don't add new dual-write
+    keys without a stronger reason; the env file should remain the
+    source of truth for any value that lives in ``Settings``.
     """
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")

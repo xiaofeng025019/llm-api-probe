@@ -19,6 +19,7 @@ from app.db.session import get_session
 from app.probers import get_prober
 from app.schemas.api import (
     ApiResponse,
+    ModelCreate,
     ModelOut,
     ProviderCreate,
     ProviderOut,
@@ -149,20 +150,19 @@ async def list_models(provider_id: uuid.UUID, session: AsyncSession = Depends(ge
 @router.post("/{provider_id}/models", response_model=ApiResponse, status_code=201)
 async def add_model(
     provider_id: uuid.UUID,
-    body: dict[str, Any],
+    body: ModelCreate,
     session: AsyncSession = Depends(get_session),
 ) -> ApiResponse:
     """Manually add a model to a provider.
 
     Used when the upstream does not expose a /v1/models endpoint
     (e.g. MiniMax) so the user can still register models for probing.
+    Body validated by `ModelCreate` Pydantic schema (field bounds
+    match the underlying Model columns).
     """
     p = await providers_svc.get_provider(session, provider_id)
     if p is None:
         raise HTTPException(status_code=404, detail="provider not found")
-    model_id = body.get("model_id")
-    if not model_id or not isinstance(model_id, str):
-        raise HTTPException(status_code=400, detail="model_id is required")
     # Check for duplicates (active or soft-deleted)
     from sqlalchemy import select
 
@@ -171,17 +171,17 @@ async def add_model(
     existing = await session.scalar(
         select(Model).where(
             Model.provider_id == p.id,
-            Model.model_id == model_id,
+            Model.model_id == body.model_id,
             Model.deleted_at.is_(None),
         )
     )
     if existing is not None:
-        raise HTTPException(status_code=409, detail=f"model {model_id!r} already exists")
+        raise HTTPException(status_code=409, detail=f"model {body.model_id!r} already exists")
     m = Model(
         provider_id=p.id,
-        model_id=model_id,
-        display_name=body.get("display_name") or None,
-        type=body.get("type") or ModelType.chat,
+        model_id=body.model_id,
+        display_name=body.display_name,
+        type=body.type,
         enabled=True,
         is_favorite=False,
     )

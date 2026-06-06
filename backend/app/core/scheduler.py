@@ -11,6 +11,7 @@ from collections import deque
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from apscheduler.jobstores.base import JobLookupError
 from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
@@ -469,8 +470,11 @@ async def _run_probe(
                     js = JobState(job_key=job_key)
                     session.add(js)
                 js.last_run_at = datetime.now(UTC)
-                outcome_obj = locals().get("outcome")
-                ok = bool(outcome_obj and outcome_obj.success)
+                # Use the recorded row (single source of truth) — the local
+                # `outcome` is None in the except branch, and the previously
+                # used `locals().get("outcome")` returned None on synthetic
+                # failures, mis-marking the JobState as "ok".
+                ok = bool(row.success)
                 js.last_status = "ok" if ok else "fail"
                 await session.commit()
 
@@ -490,13 +494,15 @@ async def _run_probe(
                     import random as _random
                     jitter = max(5, effective // 10)
                     next_at = datetime.now(UTC) + timedelta(seconds=effective + _random.randint(0, jitter))
-                    with contextlib.suppress(Exception):
+                    with contextlib.suppress(JobLookupError):
                         # modify_job raises JobLookupError if the job was
                         # removed between probe start and now (e.g. provider
                         # deleted mid-probe). The next sync_jobs cycle
-                        # will rebuild it, so silently swallowing is fine.
+                        # will rebuild it, so swallowing is fine. Other
+                        # exceptions (e.g. SQLite "database is locked") are
+                        # genuine and should be logged.
                         get_scheduler().modify_job(job_key, next_run_time=next_at)
-    except Exception as e:
+    except (sqlalchemy.exc.SQLAlchemyError, asyncio.CancelledError) as e:
         log.exception("probe run outer failure: %s", e)
 
 
@@ -877,7 +883,27 @@ def _ensure_random_sweep_job(sched: AsyncIOScheduler) -> None:
     )
 
 
-# ---------- daily cleanup ---------------------------------------------------
+# ---------- periodic cleanup jobs -----------------------------------------
+
+# How often to run the error-history trim. 60 s is short enough that
+# the bounded error list never grows past the 15-min TTL by much, and
+# long enough that we don't churn the SQLite WAL on every failed probe.
+CLEANUP_ERROR_HISTORY_INTERVAL_SECONDS = 60
+
+
+async def cleanup_error_history_loop() -> None:
+    """Trim the operator-facing error history (failed ProbeResult rows).
+
+    Runs on its own periodic job (see `cleanup_error_history_interval_seconds`)
+    rather than from the per-failure hot path in `record_outcome`. The hot
+    path is now one INSERT + UPDATE per probe; the cleanup happens in batch
+    here so a burst of failures doesn't trigger 2× DELETEs each.
+    """
+    sm = get_session_maker()
+    async with sm() as session:
+        removed = await results_svc.cleanup_error_history(session)
+    if removed:
+        log.info("error history cleanup: removed=%d rows", removed)
 
 
 async def daily_cleanup() -> None:

@@ -25,6 +25,8 @@ from app.api.v1 import api_router  # noqa: E402
 from app.core.config import get_settings  # noqa: E402
 from app.core.http import aclose_client  # noqa: E402
 from app.core.scheduler import (  # noqa: E402
+    CLEANUP_ERROR_HISTORY_INTERVAL_SECONDS,
+    cleanup_error_history_loop,
     daily_cleanup,
     get_scheduler,
     init_sse_hooks,
@@ -52,6 +54,19 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             CronTrigger(hour=3, minute=30, timezone=settings.tz),
             id="daily_cleanup",
             replace_existing=True,
+        )
+    # Error-history cleanup: was previously called from record_outcome's
+    # hot path on every failed probe (2× DELETEs each). Now its own
+    # periodic job so cleanup cost is amortized.
+    from app.core.scheduler import CLEANUP_ERROR_HISTORY_INTERVAL_SECONDS
+    with contextlib.suppress(Exception):
+        sched.add_job(
+            cleanup_error_history_loop,
+            IntervalTrigger(seconds=CLEANUP_ERROR_HISTORY_INTERVAL_SECONDS, jitter=10),
+            id="cleanup_error_history",
+            replace_existing=True,
+            coalesce=True,
+            max_instances=1,
         )
     if not sched.running:
         sched.start()

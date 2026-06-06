@@ -121,8 +121,9 @@ async def record_outcome(
         await _update_model_status(session, model, outcome)
     await session.commit()
     await session.refresh(row)
-    if not outcome.success:
-        await cleanup_error_history(session)
+    # Note: cleanup_error_history used to run here on every failed probe.
+    # It now runs on its own periodic job (scheduler.cleanup_error_history_loop)
+    # to keep the probe hot path free of two DELETE round-trips per failure.
     return row
 
 
