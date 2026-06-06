@@ -55,13 +55,29 @@ class InterceptHandler(logging.Handler):
             level = record.levelno
 
         # Walk back the stack to find the original caller so loguru's
-        # ``{name}:{function}:{line}`` reflects the real source, not
-        # this handler. ``logging`` always puts itself in the frames
-        # so we skip until we exit the logging module.
+        # ``{name}:{function}:{line}`` reflects the real source rather
+        # than this InterceptHandler. Two layers we want to skip:
+        #
+        #   1. This file (``app.core.logging``) — frames inside
+        #      ``InterceptHandler.emit`` itself.
+        #   2. The stdlib ``logging`` package — anything under
+        #      ``.../python3.x/logging/``: ``callHandlers``, ``_log``,
+        #      ``handle``, etc.
+        #
+        # The first frame we DON'T want to skip is the user code that
+        # called ``logger.info(...)`` or ``log.exception(...)``.
+        import os
+
+        logging_dir = os.path.dirname(logging.__file__)
+        this_file = os.path.abspath(__file__)
         frame, depth = logging.currentframe(), 2
-        while frame and frame.f_code.co_filename == logging.__file__:
-            frame = frame.f_back
-            depth += 1
+        while frame is not None:
+            fname = os.path.abspath(frame.f_code.co_filename)
+            if fname == this_file or fname.startswith(logging_dir):
+                frame = frame.f_back
+                depth += 1
+                continue
+            break
 
         logger.opt(depth=depth, exception=record.exc_info).log(
             level, record.getMessage()
@@ -142,7 +158,29 @@ def configure_logging() -> None:
     # InterceptHandler then forwards to loguru. Without this, every
     # request line is logged twice (once by uvicorn's handler in its
     # own format, once by ours via the intercept).
-    for name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
+    #
+    # alembic + apscheduler do the same in their own bootstrap paths
+    # (they call ``logging.basicConfig`` if root has no handler at
+    # the moment they import). Also clear them so the rotating file
+    # sink captures their lines too, in our format.
+    for name in (
+        "uvicorn",
+        "uvicorn.error",
+        "uvicorn.access",
+        "alembic",
+        "alembic.runtime",
+        "alembic.runtime.migration",
+        "apscheduler",
+        "apscheduler.scheduler",
+        "apscheduler.executors.default",
+        "apscheduler.jobstores.default",
+        "watchfiles",
+        "watchfiles.main",
+        "httpx",
+        "httpcore",
+        "sqlalchemy",
+        "sqlalchemy.engine",
+    ):
         target = logging.getLogger(name)
         target.handlers = []
         target.propagate = True
