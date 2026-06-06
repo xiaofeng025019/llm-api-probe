@@ -3,6 +3,9 @@
 
 # ---------- Stage 1: frontend build ----------
 FROM node:22-alpine AS frontend
+# pnpm refuses to silently purge a dirty node_modules without a TTY
+# (ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY). CI=1 makes it proceed.
+ENV CI=1
 WORKDIR /web
 # Copy only the manifests first to leverage layer caching
 COPY frontend/package.json frontend/pnpm-workspace.yaml* ./
@@ -32,7 +35,10 @@ RUN uv sync --no-dev
 
 # Copy backend source
 COPY backend/app ./app
-COPY backend/alembic* ./alembic 2>/dev/null || true
+COPY backend/alembic ./alembic
+# `alembic.ini` lives next to `alembic/` (sibling, not child) and is
+# referenced by absolute path from `app/db/__init__.py:_run_alembic_upgrade`.
+COPY backend/alembic.ini ./alembic.ini
 
 # Copy the prebuilt frontend from stage 1
 COPY --from=frontend /web/dist /app/frontend_dist

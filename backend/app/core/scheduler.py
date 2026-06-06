@@ -548,6 +548,17 @@ async def _run_probe(
             )
             if provider is None:
                 return
+            # Release the implicit read transaction before the network
+            # call — `aiosqlite` starts a `BEGIN` on the first SELECT
+            # and would otherwise hold the connection for up to
+            # `probe_timeout_s` (≥5s) while a slow / hung upstream
+            # sits in the call. With a single shared `async_sessionmaker`
+            # and `max_concurrency=10`, that can starve dashboard /
+            # settings / probes-on-other-providers for the full
+            # timeout window. The pending state here is read-only,
+            # so commit is a no-op. A fresh implicit transaction
+            # is opened on the next write below.
+            await session.commit()
 
             # 2. Acquire semaphores + refresh cached settings + check
             #    rate limit. Skipping the probe here is a no-op (the
@@ -573,7 +584,7 @@ async def _run_probe(
                     session, provider, model, model_id_str, target
                 )
 
-                # 4. Post-probe admin: JobState, streak, reschedule.
+                # 4. Post-probe admin: JobState, streak + reschedule.
                 await _post_probe_admin(
                     session, provider, model, model_uuid, target, row
                 )

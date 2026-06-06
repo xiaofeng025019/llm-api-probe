@@ -101,14 +101,14 @@ run "GET /providers (1 row)"      200 "http://127.0.0.1:$PORT/api/v1/providers"
 run "POST /providers duplicate"   409 -X POST -H 'Content-Type: application/json' \
     -d '{"name":"t","kind":"openai","base_url":"https://x","api_key":"sk-test"}' \
     "http://127.0.0.1:$PORT/api/v1/providers"
-run "GET /providers/missing"      404 "http://127.0.0.1:$PORT/api/v1/providers/9999"
+run "GET /providers/missing"      404 "http://127.0.0.1:$PORT/api/v1/providers/00000000-0000-0000-0000-000000000000"
 run "GET /api/v1/nonexistent"     404 "http://127.0.0.1:$PORT/api/v1/nonexistent"
 
 # NOTE: deliberately NOT calling POST /probe/run — that fires a real
 # HTTP probe to the test base_url (https://x) and the trap's `wait` would
 # block on the in-flight httpx call. Verify only that the route exists
 # and the validation path works by hitting it with an invalid id (404).
-run "POST /probe/run (404 no provider)" 404 -X POST "http://127.0.0.1:$PORT/api/v1/probe/run?provider_id=9999"
+run "POST /probe/run (404 no provider)" 404 -X POST "http://127.0.0.1:$PORT/api/v1/probe/run?provider_id=00000000-0000-0000-0000-000000000000"
 run "POST /probe/run (400 missing id)" 400 -X POST "http://127.0.0.1:$PORT/api/v1/probe/run"
 
 # SPA mount requires frontend/dist. Skip if dist wasn't built.
