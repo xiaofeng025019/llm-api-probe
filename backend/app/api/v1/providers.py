@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import uuid
-from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -14,7 +13,7 @@ from app.core.scheduler import (
     trigger_provider_now,
 )
 from app.core.sse import get_sse
-from app.db.models import ModelType, ProbeTarget, ProviderKind
+from app.db.models import ProbeTarget, ProviderKind
 from app.db.session import get_session
 from app.probers import get_prober
 from app.schemas.api import (

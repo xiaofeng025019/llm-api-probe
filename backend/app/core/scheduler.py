@@ -15,6 +15,7 @@ from apscheduler.jobstores.base import JobLookupError
 from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
+from sqlalchemy import exc as sa_exc
 from sqlalchemy import select
 
 from app.core.config import get_settings
@@ -502,7 +503,7 @@ async def _run_probe(
                         # exceptions (e.g. SQLite "database is locked") are
                         # genuine and should be logged.
                         get_scheduler().modify_job(job_key, next_run_time=next_at)
-    except (sqlalchemy.exc.SQLAlchemyError, asyncio.CancelledError) as e:
+    except (sa_exc.SQLAlchemyError, asyncio.CancelledError) as e:
         log.exception("probe run outer failure: %s", e)
 
 

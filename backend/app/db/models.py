@@ -123,6 +123,7 @@ class ProbeResult(Base):
             "model_id",
             "checked_at",
         ),
+        Index("ix_probe_results_model_time", "model_id", "checked_at"),
         Index("ix_probe_results_checked_at", "checked_at"),
         # Index the stable UUID snapshots so historical lookups
         # ("find all probes for this provider UUID") stay fast even

@@ -46,6 +46,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Schedule periodic cleanup job (daily 03:30) + start scheduler + sync jobs
     sched = get_scheduler()
     from apscheduler.triggers.cron import CronTrigger
+    from apscheduler.triggers.interval import IntervalTrigger
 
     settings = get_settings()
     with contextlib.suppress(Exception):

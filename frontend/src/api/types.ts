@@ -186,18 +186,98 @@ export interface ApiResponse<T> {
   error: { code: string; message: string; details?: unknown } | null;
 }
 
+/** Error class so callers can distinguish aborts / timeouts from API errors. */
+export class ApiError extends Error {
+  constructor(
+    public code: string,
+    message: string,
+    public cause?: unknown,
+  ) {
+    super(message);
+    this.name = "ApiError";
+  }
+}
+
 const BASE = "";
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const r = await fetch(BASE + path, {
-    headers: { "Content-Type": "application/json" },
-    ...init,
-  });
-  const body = (await r.json()) as ApiResponse<T>;
-  if (body.error) {
-    throw new Error(`${body.error.code}: ${body.error.message}`);
+/** Per-request timeout. Long enough for the dashboard on a slow uplink,
+ * short enough that a 502-stuck proxy doesn't pin the UI. */
+const REQUEST_TIMEOUT_MS = 20_000;
+
+/** In-flight dedupe: if the same `${method}:${path}:${body}` is already
+ * in flight, return the same promise instead of firing a second request.
+ * Keyed loosely; collisions on the body string are unlikely for our
+ * read-mostly workload, and dedupe is best-effort. */
+const inflight = new Map<string, Promise<unknown>>();
+
+function inflightKey(method: string, path: string, body: unknown): string {
+  let bodyKey = "";
+  if (body !== undefined) {
+    try {
+      bodyKey = JSON.stringify(body);
+    } catch {
+      bodyKey = String(Math.random());
+    }
   }
-  return body.data as T;
+  return `${method}:${path}:${bodyKey}`;
+}
+
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const method = (init?.method ?? "GET").toUpperCase();
+  // GETs are safe to dedupe; mutations (POST/PATCH/DELETE) always fire fresh.
+  const dedupe = method === "GET" || method === "HEAD";
+  const key = dedupe ? inflightKey(method, path, undefined) : "";
+
+  if (dedupe && inflight.has(key)) {
+    return inflight.get(key) as Promise<T>;
+  }
+
+  const controller = new AbortController();
+  // Combine caller-provided signal with our timeout signal so a long
+  // backend hang surfaces as an error instead of pinning the UI.
+  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  if (init?.signal) {
+    if (init.signal.aborted) controller.abort();
+    else init.signal.addEventListener("abort", () => controller.abort(), { once: true });
+  }
+
+  const promise = (async () => {
+    try {
+      const r = await fetch(BASE + path, {
+        ...init,
+        signal: controller.signal,
+        headers: { "Content-Type": "application/json", ...init?.headers },
+      });
+      // 204 / empty body — skip JSON parse to avoid `Unexpected end of JSON input`.
+      if (r.status === 204 || r.headers.get("content-length") === "0") {
+        if (!r.ok) {
+          throw new ApiError(`http_${r.status}`, `HTTP ${r.status}`);
+        }
+        return null as T;
+      }
+      const body = (await r.json()) as ApiResponse<T>;
+      if (body.error) {
+        throw new ApiError(
+          body.error.code,
+          `${body.error.code}: ${body.error.message}`,
+          body.error,
+        );
+      }
+      return body.data as T;
+    } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") {
+        throw new ApiError("aborted", "Request aborted or timed out", err);
+      }
+      if (err instanceof ApiError) throw err;
+      throw new ApiError("network", String(err), err);
+    } finally {
+      clearTimeout(timeout);
+      if (dedupe) inflight.delete(key);
+    }
+  })();
+
+  if (dedupe) inflight.set(key, promise);
+  return promise;
 }
 
 export const api = {
