@@ -404,18 +404,32 @@ async def _run_probe(
 
                 client = get_client()
                 prober = get_prober(provider.kind, client)
+                # Watchdog: enforce a hard upper bound on the probe call
+                # (provider.timeout_seconds is the configured probe-level
+                # timeout, but a misbehaving upstream that returns headers
+                # and never a body can keep the streaming iterator alive
+                # past it; `+ 5` is slack for connection setup + first byte).
+                # Without this, a single hung probe blocks APScheduler's
+                # `shutdown(wait=True)` indefinitely.
+                probe_timeout_s = max(5, provider.timeout_seconds + 5)
                 try:
                     if target == ProbeTarget.list_models:
-                        outcome = await prober.list_models(provider)
-                    else:
-                        outcome = await prober.probe_chat(
-                            provider,
-                            model_id_str,
-                            prompt=get_settings().probe_prompt,
-                            max_tokens=get_settings().probe_max_tokens,
-                            stream=True,
+                        outcome = await asyncio.wait_for(
+                            prober.list_models(provider),
+                            timeout=probe_timeout_s,
                         )
-                except Exception as e:
+                    else:
+                        outcome = await asyncio.wait_for(
+                            prober.probe_chat(
+                                provider,
+                                model_id_str,
+                                prompt=get_settings().probe_prompt,
+                                max_tokens=get_settings().probe_max_tokens,
+                                stream=True,
+                            ),
+                            timeout=probe_timeout_s,
+                        )
+                except (asyncio.TimeoutError, Exception) as e:
                     log.exception("probe task crashed: %s", e)
                     await results_svc.record_outcome(
                         session,
@@ -874,7 +888,13 @@ async def _random_probe_sweep() -> None:
             candidates.append((provider_uuid, model_uuid))
     if not candidates:
         return
-    sample_size = min(RANDOM_SWEEP_PROBES_PER_TICK, len(candidates))
+    # Scale per-tick count by fleet size. The old fixed 3 was
+    # ~3x over-probe on single-provider setups (3 random on top of
+    # the 1 periodic) and a rounding error at 500 models (3/500).
+    # Aim: cover ~5% of the fleet per tick, clamped to [3, 50].
+    fleet = len(candidates)
+    sample_size = max(3, min(50, fleet // 20, fleet))
+    sample_size = min(sample_size, fleet)
     chosen = random.sample(candidates, sample_size)
     for provider_uuid, model_uuid in chosen:
         # trigger_now does its own enabled/deleted checks. If a
