@@ -30,7 +30,7 @@ export function ProviderDialog({
   const [showKey, setShowKey] = useState(false);
   const [proxy, setProxy] = useState(provider?.proxy ?? "");
   const [intervalSec, setIntervalSec] = useState(provider?.interval_seconds ?? 300);
-  const [timeoutSec, setTimeoutSec] = useState(provider?.timeout_seconds ?? 30);
+  const [timeoutSec, setTimeoutSec] = useState(provider?.timeout_seconds ?? 60);
   const [headersJson, setHeadersJson] = useState(provider?.headers_json ?? "");
   const [enabled, setEnabled] = useState(provider?.enabled ?? true);
   const [busy, setBusy] = useState(false);

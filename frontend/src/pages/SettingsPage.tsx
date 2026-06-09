@@ -18,7 +18,7 @@ const KNOWN_SETTINGS = [
   { key: "provider_rate_limit_per_minute", descKey: "settingsPage.setting.providerRateLimit", defaultValue: "20", kind: "int", min: 1, max: 1000 },
   { key: "favorite_model_failure_confirmations", descKey: "settingsPage.setting.favoriteConfirm", defaultValue: "2", kind: "int", min: 1, max: 100 },
   { key: "regular_model_failure_confirmations", descKey: "settingsPage.setting.regularConfirm", defaultValue: "3", kind: "int", min: 1, max: 100 },
-  { key: "default_timeout_seconds", descKey: "settingsPage.setting.defaultTimeout", defaultValue: "30", kind: "int", min: 2, max: 600 },
+  { key: "default_timeout_seconds", descKey: "settingsPage.setting.defaultTimeout", defaultValue: "60", kind: "int", min: 2, max: 600 },
   { key: "max_concurrency", descKey: "settingsPage.setting.maxConcurrency", defaultValue: "10", kind: "int", min: 1, max: 1000 },
   { key: "retention_days", descKey: "settingsPage.setting.retentionDays", defaultValue: "30", kind: "int", min: 1, max: 3650 },
   { key: "adaptive_backoff_enabled", descKey: "settingsPage.setting.adaptiveBackoff", defaultValue: "true", kind: "bool" },
