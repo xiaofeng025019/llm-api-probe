@@ -1,7 +1,7 @@
 [project]
-name = "llm-usability-backend"
+name = "llm-api-probe-backend"
 version = "0.1.0"
-description = "LLM API provider availability monitor"
+description = "LLM API Probe — provider availability monitor"
 requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.115",

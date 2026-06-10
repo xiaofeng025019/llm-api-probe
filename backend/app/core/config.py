@@ -84,9 +84,9 @@ class Settings(BaseSettings):
     def model_post_init(self, __context):
         self.data_dir.mkdir(parents=True, exist_ok=True)
         if not self.database_url:
-            self.database_url = f"sqlite+aiosqlite:///{self.data_dir}/llm_usability.db"
+            self.database_url = f"sqlite+aiosqlite:///{self.data_dir}/llm_api_probe.db"
         if not self.sync_database_url:
-            self.sync_database_url = f"sqlite:///{self.data_dir}/llm_usability.db"
+            self.sync_database_url = f"sqlite:///{self.data_dir}/llm_api_probe.db"
 
 
 _settings: Settings | None = None

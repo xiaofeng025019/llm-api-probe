@@ -2,7 +2,7 @@
 
 ## Overview
 
-LLM Usability is a single-process monolith: one FastAPI process serves the
+LLM API Probe is a single-process monolith: one FastAPI process serves the
 REST API, runs the in-process scheduler, hosts the static frontend, and
 probes upstream LLM providers over HTTP.
 
@@ -48,16 +48,35 @@ design, since this is a personal-local tool.
 
 ## Concurrency
 
-Two layers of `asyncio.Semaphore` protect upstream providers from being
-overwhelmed:
+Three layers protect upstream providers from being overwhelmed:
 
-- **Root semaphore** (`max_concurrency`): global ceiling on simultaneous
-  HTTP probes. Default `10`.
-- **Per-provider semaphore**: one per provider, default `1` (sequential probes
-  per provider). Avoids one noisy provider saturating the global pool.
+- **Trigger queue** (priority FIFO): all 4 probe sources (periodic APScheduler job, random
+  sweep, SSE wake sweep, manual API call) submit to a single `TriggerQueue` with
+  MANUAL > SWEEP > PERIODIC priority. The queue deduplicates pending requests by
+  (provider, model, target) key and provides 503 backpressure when full (1000 items).
+- **Worker pool** (`max_concurrency` workers): drains the trigger queue. Each worker
+  acquires the per-provider semaphore + root semaphore before running a probe.
+- **Per-provider semaphore** + **root semaphore** (`asyncio.Semaphore`):
+  - Root semaphore: global ceiling on simultaneous HTTP probes. Default `10`.
+  - Per-provider semaphore: one per provider, default `1` (sequential probes
+    per provider). Avoids one noisy provider saturating the global pool.
 
-A probe acquires both, then makes its request. The `with` context manager
-releases on success and failure alike.
+Additional cost-saving mechanisms (all in-memory, reset on restart):
+
+- **Per-provider sliding-window rate limiter**: at most N requests in any 60s window
+  per provider (default `20`). Exceeding the limit silently skips the probe.
+- **Upstream 429 Retry-After cooldown**: when an upstream returns HTTP 429 with a
+  `Retry-After` header, the provider enters cooldown. Subsequent probes are skipped
+  until the cooldown expires (capped at 300s). Fallback of 30s when no header.
+- **Adaptive backoff**: a model that succeeds N times in a row gets probed less often
+  (1× → 2× → 4× → 8× of its base interval). A single failure halves the streak
+  (floor 0), so a 25-probe streak → 12 after one transient timeout. Consecutive
+  failures decay naturally: 60→30→15→7→3→1→0 over 6 failures.
+- **Idle throttling**: when no SSE subscriber is connected, all chat-completion
+  probes use a 5× interval. The moment a subscriber connects, the multiplier snaps
+  to 1 and a one-shot full sweep refreshes everything.
+
+Effective interval = base × backoff_mult × idle_mult.
 
 ## Data model
 
@@ -115,8 +134,12 @@ job_states  (last_run_at / last_status for each scheduled job)
 | `latency_ms`, `ttfb_ms` | int (nullable) | streaming probe only |
 | `error_code` | enum | `auth` / `rate_limit` / `timeout` / `server` / `network` / `other` |
 | `error_message` | string (truncated 1k) | |
+| `retry_after_seconds` | int (nullable) | parsed from upstream `Retry-After` on 429 |
+| `pinned` | bool | keeps error rows past retention cleanup |
 | `checked_at` | timestamp | indexed |
-| `provider_name_at_probe`, `model_id_at_probe` | string | **snapshot** fields for historical accuracy after rename/delete |
+| `provider_uuid_at_probe` | UUID snapshot | stable forever, survives hard-delete |
+| `model_uuid_at_probe` | UUID snapshot (nullable) | stable forever |
+| `provider_name_at_probe`, `model_id_at_probe` | string snapshot | human-readable display at probe time |
 
 ### Indexes
 
@@ -188,21 +211,44 @@ can still surface it as "model: gpt-4o (since-deleted, uuid: 8c…)".
 
 ## Request flow (probe)
 
+The 4 trigger sources all submit to a single priority queue; a worker pool drains it:
+
 ```
-APScheduler tick (every interval)
-  └─→ _run_probe(provider_uuid, model_uuid, target)
-        ├─ acquire root_sem, provider_sem
-        ├─ get_prober(kind) → Prober instance
-        ├─ probe.list_models(provider)  or  probe.probe_chat(...)
-        │   └─ httpx request to upstream
-        ├─ record_outcome(...)
-        │   ├─ map HTTP status / exception → ErrorCode
-        │   ├─ snapshot provider_name + model_id
-        │   └─ INSERT probe_results row
-        ├─ if target == list_models and success:
-        │     upsert_discovered(...)  # write discovered models
-        ├─ SseManager.broadcast("probe.completed", {...})
-        └─ UPDATE job_states (last_run_at, last_status)
+Trigger sources:
+  1. APScheduler periodic tick (every interval)
+  2. Random sweep (every 60s, ~5% of fleet)
+  3. SSE wake (0→1 subscriber — full sweep)
+  4. Manual API call (POST /probe/run)
+
+Each source calls enqueue_trigger(priority, ...)
+  └─→ TriggerQueue.enqueue()
+        ├─ Dedup: drop if same (provider, model, target) already pending
+        ├─ Priority: MANUAL > SWEEP > PERIODIC
+        └─ Overflow: evict lowest-priority, return 503 if MANUAL can't fit
+
+Worker pool (N = max_concurrency workers):
+  └─→ TriggerQueue.dequeue()
+        └─→ _run_probe(provider_uuid, model_uuid, target)
+              ├─ _resolve_probe_target  — DB lookup + skip predicates
+              ├─ commit read txn        — release before network call
+              ├─ acquire root_sem, provider_sem
+              ├─ _refresh_cached_settings
+              ├─ _check_provider_cooldown    — skip if 429 Retry-After active
+              ├─ _check_provider_rate_limit  — skip if sliding-window full
+              ├─ get_prober(kind) → Prober instance
+              ├─ probe.list_models(provider)  or  probe.probe_chat(...)
+              │   └─ httpx request to upstream (with asyncio.wait_for watchdog)
+              ├─ record_outcome(...)
+              │   ├─ map HTTP status / exception → ErrorCode
+              │   ├─ snapshot provider_uuid + model_uuid + names
+              │   ├─ INSERT probe_results row
+              │   └─ UPDATE model status (online / suspect / offline / …)
+              ├─ if target == list_models and success:
+              │     upsert_discovered(...)  # write discovered models
+              ├─ if HTTP 429: _set_provider_cooldown(seconds)
+              ├─ SseManager.broadcast("probe.completed", {...})
+              ├─ if failure + favorite: SseManager.broadcast("job.error", {...})
+              └─ _post_probe_admin: JobState + streak + reschedule
 ```
 
 ## Request flow (SSE)
@@ -236,12 +282,62 @@ exponential backoff (1s → 30s cap).
 
 After each probe, the model is updated:
 
-- `success` and HTTP 2xx → tentative `online`.
+- `success` and HTTP 2xx → `online`. Consecutive failures reset to 0.
 - `consecutive_failures` increments on failure, resets on success.
 - `status_confirmed_at` records when the current status was last corroborated.
+- Status thresholds (favorite: 2 failures → `offline`, regular: 3 failures → `offline`)
+  are runtime-tunable via the Settings page.
 
-The exact thresholds for `online` / `suspect` / `offline` are evaluated at
-read time in the dashboard; the model just records the failure streak.
+### Model statuses
+
+| Status | Meaning |
+| --- | --- |
+| `online` | Latest probe succeeded |
+| `stale` | Status is `online` but last probe is older than `MAX_EFFECTIVE_MULTIPLIER × STALE_THRESHOLD_MULTIPLIER × base_interval` (display-only; not persisted) |
+| `suspect` | One or more failures, but below the `offline` threshold |
+| `offline` | Consecutive failures ≥ threshold |
+| `rate_limited` | Upstream returned HTTP 429 |
+| `unauthorized` | Upstream returned HTTP 401 / 403 |
+| `not_found` | Upstream returned HTTP 404 or "model not found" |
+| `unknown` | Never probed yet |
+
+## Adaptive backoff + idle throttling
+
+Two complementary cost-saving mechanisms, both purely in-memory (reset on restart):
+
+### Adaptive backoff
+
+| Streak | Multiplier |
+| --- | --- |
+| 0–2 | 1× (base interval; recent fresh signal) |
+| 3–9 | 2× (mildly stable) |
+| 10–29 | 4× (very stable) |
+| 30+ | 8× (rock-solid; capped) |
+
+On success: streak +1. On failure: streak halved (floor 0). Halving preserves
+built-up trust — a model with a 25-probe streak at 4× stays at 12 (still 4×)
+after one transient timeout. Consecutive failures decay naturally:
+60→30→15→7→3→1→0 over 6 failures.
+
+### Idle throttling
+
+When no SSE subscriber is connected (nobody watching the dashboard), all
+chat-completion probes use a 5× interval multiplier. On first subscriber
+connect, multiplier snaps to 1× and a one-shot full sweep refreshes all
+providers. On last disconnect, already-scheduled jobs are pushed further out
+by `IDLE_MULTIPLIER × remaining_gap`.
+
+Both toggles (`adaptive_backoff_enabled`, `idle_throttle_enabled`) are
+runtime-tunable via the Settings page.
+
+### Effective interval
+
+```
+effective = base_interval × backoff_multiplier × idle_multiplier
+```
+
+Post-probe reschedule uses the effective interval + 10% jitter (min 5s) to
+spread batch probes across time.
 
 ## Frontend architecture
 

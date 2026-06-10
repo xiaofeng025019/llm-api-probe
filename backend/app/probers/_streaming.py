@@ -32,12 +32,6 @@ from app.probers.error_mapping import (
 from app.probers.types import MAX_UPSTREAM_ERROR_BODY_CHARS, ErrorCode, ProbeOutcome
 
 
-class _StreamResult:
-    """Result of a streaming chat probe — used internally; the helper
-    returns a ProbeOutcome directly.
-    """
-
-
 async def stream_chat(
     client: httpx.AsyncClient,
     method: str,

@@ -75,7 +75,7 @@ export function SettingsPage() {
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `llm-usability-config-${new Date().toISOString().slice(0, 10)}.json`;
+      a.download = `llm-api-probe-config-${new Date().toISOString().slice(0, 10)}.json`;
       a.click();
       URL.revokeObjectURL(url);
     } catch {

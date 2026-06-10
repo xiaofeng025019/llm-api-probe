@@ -1,10 +1,12 @@
+name: llm-api-probe
+
 services:
   app:
     build:
       context: .
       dockerfile: Dockerfile.backend
-    image: llm-usability:latest
-    container_name: llm-usability
+    image: llm-api-probe:latest
+    container_name: llm-api-probe
     restart: unless-stopped
     ports:
       - "127.0.0.1:6200:6200"
@@ -14,8 +16,8 @@ services:
     environment:
       APP_HOST: 0.0.0.0
       APP_PORT: "6200"
-      DATABASE_URL: sqlite+aiosqlite:////app/data/llm_usability.db
-      SYNC_DATABASE_URL: sqlite:////app/data/llm_usability.db
+      DATABASE_URL: sqlite+aiosqlite:////app/data/llm_api_probe.db
+      SYNC_DATABASE_URL: sqlite:////app/data/llm_api_probe.db
       LOG_LEVEL: INFO
       TZ: Asia/Shanghai
     healthcheck:

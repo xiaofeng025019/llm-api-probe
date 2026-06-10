@@ -3,7 +3,7 @@ import type { Locale } from "../lib/i18n";
 import { setLocale as setLocaleGlobal } from "../lib/i18n";
 import { useT } from "./useT";
 
-const KEY = "llm-usability-locale";
+const KEY = "llm-api-probe-locale";
 
 function getInitial(): Locale {
   if (typeof window === "undefined") return "en";
@@ -14,7 +14,7 @@ function getInitial(): Locale {
 }
 
 /** React hook for the user's preferred UI locale.
- *  - Reads from `localStorage` (key: `llm-usability-locale`)
+ *  - Reads from `localStorage` (key: `llm-api-probe-locale`)
  *  - Falls back to `navigator.language` for first-time visitors
  *  - Default is English
  *  - Mirrors `useTheme` in shape and persistence pattern

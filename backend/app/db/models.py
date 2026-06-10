@@ -71,7 +71,7 @@ class Provider(Base):
     proxy: Mapped[str | None] = mapped_column(String(500), nullable=True)
     enabled: Mapped[bool] = mapped_column(default=True)
     interval_seconds: Mapped[int] = mapped_column(Integer, default=300)
-    timeout_seconds: Mapped[int] = mapped_column(Integer, default=30)
+    timeout_seconds: Mapped[int] = mapped_column(Integer, default=60)
     headers_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(

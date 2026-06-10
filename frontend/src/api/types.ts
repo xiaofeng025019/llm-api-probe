@@ -9,6 +9,7 @@ export type ModelType =
   | "unknown";
 export type ModelHealthStatus =
   | "online"
+  | "stale"
   | "suspect"
   | "offline"
   | "rate_limited"

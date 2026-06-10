@@ -1,4 +1,4 @@
-# Contributing to LLM Usability
+# Contributing to LLM API Probe
 
 Thanks for your interest in contributing! This document covers everything you need to get started.
 

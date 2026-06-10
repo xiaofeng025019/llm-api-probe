@@ -3,6 +3,7 @@
 ## Unreleased
 
 ### ✨ Added
+- **Renamed project to LLM API Probe** across backend metadata, frontend UI, Docker assets, documentation, and default SQLite database naming; added a dedicated SVG app icon / favicon.
 - **MiniMax model list fallback**: `openai_base.py` serves a hard-coded model list when `GET /v1/models` returns 404, so providers like MiniMax that don't expose the endpoint still auto-populate models.
 - **Manual model add API**: `POST /api/v1/providers/{id}/models` lets users add a model by ID when auto-discovery isn't available.
 - **API Key visibility toggle**: Provider dialog shows an inline eye icon to switch between password dots and plaintext; pre-fills the current key on edit.
@@ -11,6 +12,10 @@
 - **Sync-models records ProbeResult**: The `sync-models` endpoint now persists the `list_models` outcome so the dashboard sees fresh status immediately.
 - **Loguru-based logging** with rotating file sink (`data/app.log`, 10 MB × 5 keep) per the original spec, plus stdout. `InterceptHandler` forwards all stdlib `logging` records and uvicorn's three named loggers so existing `log.info()` calls keep working unchanged.
 - **SSE `provider.updated` / `model.updated` broadcasts**: previously the frontend subscribed to these events but the backend never emitted them; provider/model PATCH, POST, DELETE, and `/sync-models` now broadcast so the dashboard refreshes within ~500 ms without waiting for the 30-second poll.
+- **Unified trigger queue** with priority (MANUAL > SWEEP > PERIODIC), dedup, and 503 backpressure. All 4 trigger sources (periodic scheduler, random sweep, SSE wake, manual API) submit to a single priority queue drained by a worker pool.
+- **Upstream 429 Retry-After cooldown**: per-provider cooldown honored when upstream returns `Retry-After` on 429; subsequent probes are skipped until cooldown expires.
+- **Auto-probe-all on startup**: fires a one-shot full sweep after restart/sleep so the dashboard sees fresh signal within seconds instead of waiting up to the max effective interval.
+- **Model "stale" display status**: the dashboard demotes still-online models to "stale" when the last probe is older than `MAX_EFFECTIVE_MULTIPLIER × STALE_THRESHOLD_MULTIPLIER × base_interval` (accounts for adaptive backoff + idle throttling stretching the probe gap).
 
 ### 🔧 Changed
 - **Removed local synthetic `rate_limit`**: The scheduler no longer manufactures fake `rate_limit` errors when the per-provider sliding-window limit is hit; it simply skips the probe. Only upstream-returned 429s are recorded.
@@ -18,15 +23,34 @@
 - **`ProviderDialog` extracted to `components/ProviderDialog.tsx`**; the obsolete `ProvidersPage` (redirect-only since 2026-06-04) was deleted. The `/providers` route still redirects to `/` for backward-compatibility with bookmarks.
 - **Settings split documented**: `app/core/config.py` (bootstrap env) and `app/services/settings.py` (runtime DB tunables) now carry mirror docstrings explaining which layer to use for new values.
 - **Probe-trigger endpoints documented**: `POST /probe/run` and `POST /providers/{id}/run` now have cross-referencing docstrings clarifying the per-model vs provider-wide split; behavior unchanged.
+- **Shared streaming helper** (`_streaming.py`): the 3 probers' copy-pasted ~50-line streaming + TTFB + error-mapping logic is now one function. Each prober just provides URL, body, headers, and terminator byte sequence.
+- **Import/export business logic extracted** to `services/import_export.py` — per-spec merge logic is now unit-testable independent of the HTTP route.
+- **Dropped 4 vestigial DB-seeded settings keys** (`default_interval_seconds`, `default_timeout_seconds`, `retention_days`). Only the env value was actually read; the DB rows were misleading dead weight.
+- **Adaptive backoff streak halving**: on probe failure the streak is halved (floor 0) instead of reset to 0. A model with a 25-probe streak that gets one transient timeout stays at 12 (4× tier) instead of dropping to 1×. Consecutive failures decay naturally: 60→30→15→7→3→1→0 over 6 failures.
+- **Default timeout: 30→60 seconds**. The old 30s was too aggressive for streaming models (TTFB 10-40s common); 80% of 咸鱼-MiniMax probes timed out at 30s. The 60s default is still conservative (validated ≤600s).
+- **Random sweep scales by fleet size** (~5% per tick, clamped to [3, 50]) instead of a fixed 3 probes/tick — avoids over-probing single-provider setups and under-probing large fleets.
+- **Log rotation uses zip compression** instead of plain rotation — cuts disk usage ~10× for rotated log files.
 
 ### 🐛 Fixed
 - **MiniMax chat probes 404**: Fixed `base_url` double `/v1` causing all MiniMax chat probes to hit a non-existent endpoint.
 - **Dashboard stale `list_models` status**: After clicking "Sync models" the dashboard now reflects the latest result instead of an old failure.
 - **SSE broadcast skips empty subscribers**: `SseManager.broadcast()` short-circuits when there are no connected clients.
+- **Docker image runtime defaults**: container image now listens on `0.0.0.0:6200` by default, exposes port 6200, and starts with `uv run --no-sync` so runtime startup does not attempt dependency installation.
+- **Docker Compose project name**: compose file declares `name: llm-api-probe`, so generated networks/containers no longer inherit the old checkout directory name.
 - **Docker port mismatch**: `Dockerfile.backend` hard-coded `--port 8000`, ignoring `docker-compose.yml`'s `APP_PORT=6200`; the published 127.0.0.1:6200 mapping landed on a dead port. CMD now reads `${APP_HOST}` / `${APP_PORT}` from env.
+- **Session read txn released before network call**: `_run_probe` commits the implicit read transaction before the probe network call, preventing a slow upstream from starving dashboard/settings probes for the full timeout window.
+- **User-facing error messages**: error history page now shows human-readable strings ("Request timed out") instead of Python `repr()` output.
+- **Stale detection accounts for max effective multiplier**: a model at peak backoff (8×) + idle throttle (5×) probes at most every `base_interval × 40`; the stale check now uses this ceiling instead of the raw base interval, fixing false "stale" labels on healthy models.
+- **Provider state pruned in `sync_all_jobs`**: per-provider semaphores, rate-limit buckets, and success-streak entries for deleted providers/models are now cleaned up.
+- **Probe failure logs at WARNING** (was ERROR), no traceback: probe failure is steady-state, not exceptional. Every per-model-per-interval failure previously logged a full Python traceback (10-30 KB per record → 3.5 MB over 35 hours). Now a single WARNING breadcrumb with `repr(exc)` for debugging context.
+
+### 🖥️ Frontend
+- **`useSse` hardened**: JSON.parse guard on malformed SSE data, per-consumer error isolation (one bad callback doesn't kill the stream), visibility-change pause/resume.
+- **"View details" button** on dashboard provider cards for explicit drill-down.
+- **`ModelHealthStatus` includes `"stale"`**: TypeScript type now matches the backend's dashboard response.
 
 ### 📊 Test coverage
-- **104** backend tests (pytest) — adds `test_logging.py` (3 tests covering idempotent setup, stdlib→loguru bridge, and uvicorn handler clearing).
+- **180** backend tests (pytest) — covers trigger queue, 429 cooldown, streaming log level, stale detection, interval defaults, worker pool, import/export, unique model constraints, and more.
 
 ---
 

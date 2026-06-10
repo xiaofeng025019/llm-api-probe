@@ -156,8 +156,18 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             sched.shutdown()
     await aclose_client()
 
+    # Dispose the async engine so all pooled connections are returned
+    # before the event loop closes. Without this, aiosqlite's background
+    # thread raises "Event loop is closed" when the GC finalises stale
+    # connections after uvicorn has torn down the loop.
+    from app.db.session import get_engine as _get_engine
 
-app = FastAPI(title="LLM Usability", version="0.1.0", lifespan=lifespan)
+    engine = _get_engine()
+    if engine is not None:
+        await engine.dispose()
+
+
+app = FastAPI(title="LLM API Probe", version="0.1.0", lifespan=lifespan)
 app.include_router(api_router)
 
 
@@ -257,7 +267,7 @@ else:
     @app.get("/")
     async def root_placeholder() -> dict[str, str]:
         return {
-            "name": "llm-usability",
+            "name": "llm-api-probe",
             "frontend": "not built",
             "docs": "/docs",
         }

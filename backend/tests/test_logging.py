@@ -109,13 +109,13 @@ def test_file_sink_compresses_rotated_logs() -> None:
     configure_logging() and assert the resulting loguru configuration
     contains the compression directive.
     """
+    import inspect
+
     from loguru import logger
 
     # loguru's default formatter is "sink" + rotation/compression in
     # the sink's _kwargs. We assert by inspecting the source of
     # configure_logging() — it's the contract under test.
-    import inspect
-
     from app.core import logging as logging_mod
 
     src = inspect.getsource(logging_mod.configure_logging)

@@ -64,9 +64,7 @@ async def test_stream_chat_failure_logs_at_warning_not_error() -> None:
     failure_logs = [c for c in captured if "probe chat failed" in c["text"]]
     assert failure_logs, f"no probe-failure log captured: {captured}"
     for rec in failure_logs:
-        assert rec["level"] == "WARNING", (
-            f"probe failure must log at WARNING, got {rec['level']}: {rec}"
-        )
+        assert rec["level"] == "WARNING", f"probe failure must log at WARNING, got {rec['level']}: {rec}"
         # WARNING with no exception → no traceback in the output.
         # loguru attaches ``exception`` to the record only when called
         # from an except block; we don't want that path here.

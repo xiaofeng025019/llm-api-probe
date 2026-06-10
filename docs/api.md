@@ -76,7 +76,7 @@ Request body (`ProviderCreate`):
   "proxy": null,
   "enabled": true,
   "interval_seconds": 300,
-  "timeout_seconds": 30,
+  "timeout_seconds": 60,
   "headers_json": null
 }
 ```
@@ -190,7 +190,7 @@ Response (`ExportPayload`):
       "proxy": null,
       "enabled": true,
       "interval_seconds": 300,
-      "timeout_seconds": 30,
+      "timeout_seconds": 60,
       "headers_json": null
     }
   ],
@@ -356,6 +356,11 @@ All schema fields are exposed in the OpenAPI document. The high-level shape:
   error_code: "auth" | "rate_limit" | "timeout" | "server" | "network" | "other" | null;
   error_message: string | null;
   checked_at: string;
+  provider_uuid_at_probe: string;
+  model_uuid_at_probe: string | null;
+  provider_name_at_probe: string;
+  model_id_at_probe: string | null;
+  pinned: boolean;
 }
 ```
 

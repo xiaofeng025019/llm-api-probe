@@ -101,7 +101,7 @@ uv run alembic downgrade -1    # 回滚一版
 uv run alembic downgrade base  # 回到起点（删所有表）
 ```
 
-回滚到 base **会丢所有数据**。生产回滚前先备份 `data/llm_usability.db`。
+回滚到 base **会丢所有数据**。生产回滚前先备份 `data/llm_api_probe.db`。
 
 ## 常见操作速查
 
@@ -160,7 +160,7 @@ def upgrade() -> None:
 ## 不要做的事
 
 - ❌ 在 `init_db` 里手写 `op.create_table` — 那是迁移的工作
-- ❌ 直接改 `data/llm_usability.db` 绕开迁移 — 下次启动会试图迁移然后失败
+- ❌ 直接改 `data/llm_api_probe.db` 绕开迁移 — 下次启动会试图迁移然后失败
 - ❌ 删 `alembic_version` 表的行 — alembic 会以为从未跑过迁移，重头跑一遍
 - ❌ 修改已发布的迁移脚本（改 hash）— 别人的本地库会进入 unknown revision 状态
 

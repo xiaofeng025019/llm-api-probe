@@ -11,7 +11,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | Need | File |
 | --- | --- |
 | Repo conventions (build, test, naming, PR process) | `AGENTS.md` |
-| Full design spec | `docs/superpowers/specs/2026-06-03-llm-usability-design.md` |
+| Full design spec | `docs/superpowers/specs/2026-06-03-llm-api-probe-design.md` |
 | Architecture / process model / data flow | `docs/architecture.md` |
 | API reference (envelope, endpoints, status codes) | `docs/api.md` |
 | DB migration history | `docs/superpowers/db-migrations.md` |
@@ -27,12 +27,12 @@ Single `uvicorn` process on `127.0.0.1:6200` that owns the HTTP server, the in-p
 - **Two-tier config.** `app/core/config.py:Settings` is the bootstrap layer (env / `.env`, read once at import — host/port, DB URL, `max_concurrency`, timezone, `frontend_dist`). `app.services.settings` reads/writes the `settings` DB table for runtime tunables (probe intervals, rate limit, the backoff/idle toggles, `retention_days`). Three keys (`default_interval_seconds`, `default_timeout_seconds`, `retention_days`) are seeded into the `settings` table on first launch but only the env value is actually read by the code — the DB rows are vestigial. Don't add new dual-write keys without a stronger reason.
 - **Stable API identity via `uuid_id`.** The entity tables (`Provider`, `Model`, `ProbeResult`) have both an `int` PK and a separate `uuid_id`; the API uses `uuid_id` exclusively. `Setting` (string PK = `key`) and `JobState` (string PK = `job_key`, internal-only) are the exceptions. `ProbeResult` additionally stores `provider_uuid_at_probe` / `model_uuid_at_probe` snapshots so historical reporting keeps working after a hard delete or a re-create with reassigned int PKs — query the snapshot column, not the live FK.
 - **Scheduler cost-saving.** `app/core/scheduler.py` layers three mechanisms on a plain `IntervalTrigger` (see the file for the exact curves and triggers):
-  - **Adaptive backoff** — consecutive-success streak → 1×→2×→4×→8× interval multiplier; one failure snaps the streak back to 0.
+  - **Adaptive backoff** — consecutive-success streak → 1×→2×→4×→8× interval multiplier; one failure halves the streak (floor 0, degrades toward 1×).
   - **Idle throttling** — no SSE subscriber → 5× interval. The actual handlers are `_on_sse_wake` / `_on_sse_sleep` in `app/core/scheduler.py`; `init_sse_hooks()` wires them via `SseManager.set_lifecycle_hooks` (which is just a setter). First-subscriber fires a one-shot full sweep, last-unsubscribe pushes already-scheduled jobs out.
   - **Random continuous sweep** — a background job picks a few random enabled models each tick so the dashboard stays fresh between scheduled fires.
 
-  All multipliers are runtime-tunable; the cached toggles are refreshed on every probe, so a Settings save propagates on the next probe (bounded by the 20s random sweep, not the modified model's own interval).
-- **Concurrency.** Probes are gated by a root semaphore (`max_concurrency`) and a per-provider semaphore (default 1). A per-provider sliding-window rate limiter caps requests per minute — see `scheduler.py` for the gate and the bucket.
+  All multipliers are runtime-tunable; the cached toggles are refreshed on every probe, so a Settings save propagates on the next probe (bounded by the 60s random sweep, not the modified model's own interval).
+- **Concurrency.** The 4 trigger sources (periodic APScheduler, random sweep, SSE wake, manual API) all submit to a unified `TriggerQueue` (MANUAL > SWEEP > PERIODIC priority, dedup by key, 503 backpressure at 1000 items). A worker pool (`max_concurrency` workers) drains the queue. Each probe acquires a root semaphore (`max_concurrency`) and a per-provider semaphore (default 1). A per-provider sliding-window rate limiter caps requests per minute, and a per-provider 429 Retry-After cooldown skips probes after an upstream rate-limit response — see `scheduler.py` for the gate and the bucket.
 - **SSE.** Probe completion fans out via `SseManager.broadcast` on `/api/v1/events`; the dashboard coalesces updates at ~500ms (see `useSse` + `useDashboard`). A `job.error` event is broadcast only for failed favorite-model probes and surfaces as a global toast.
 - **Prober Protocol.** All provider integrations implement the `Prober` Protocol (`app/probers/types.py`) and are wired via the `get_prober` factory — never import a prober class directly from a route.
 - **Job IDs.** `p{provider_uuid}:{target}:m{model_uuid_or_-}` — used by `sync_jobs_for_provider` for reconciliation and by `trigger_now` to fast-forward via `modify_job`. The `background:random_probe_sweep` job is the only one without that prefix.
@@ -119,4 +119,4 @@ The CLI auto-runs `alembic upgrade head` first, so it's safe to invoke before th
 
 ## Project memory
 
-This repo's design and intent are documented in `docs/superpowers/specs/2026-06-03-llm-usability-design.md`. When in doubt, that spec wins.
+This repo's design and intent are documented in `docs/superpowers/specs/2026-06-03-llm-api-probe-design.md`. When in doubt, that spec wins.

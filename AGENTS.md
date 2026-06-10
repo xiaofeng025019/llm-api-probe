@@ -37,7 +37,7 @@ uv run ruff format --check app tests
 uv run mypy app
 ```
 
-Use `bash scripts/e2e_smoke.sh` from `backend/` for API and SPA smoke coverage against a temporary SQLite database. Avoid manual `curl` tests against `data/llm_usability.db`; they can pollute local user data.
+Use `bash scripts/e2e_smoke.sh` from `backend/` for API and SPA smoke coverage against a temporary SQLite database. Avoid manual `curl` tests against `data/llm_api_probe.db`; they can pollute local user data.
 
 ## Commit & Pull Request Guidelines
 

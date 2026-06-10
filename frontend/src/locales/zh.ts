@@ -2,7 +2,7 @@
 // structure, not the exact string values).
 
 const zh = {
-  appName: "LLM 可用性",
+  appName: "LLM API Probe",
   nav: {
     dashboard: "总览",
     providers: "服务商",

@@ -1,7 +1,7 @@
-# LLM API 可用性检测服务 — 设计
+# LLM API Probe — 设计
 
 **日期**：2026-06-03
-**项目目录**：`/home/test/xf_ws/llm_usability`
+**项目目录**：`/home/test/xf_ws/llm-api-probe`
 **状态**：已实现（2026-06-06 时 101 tests, ruff clean）
 
 > **此文档是 2026-06-03 的原始设计稿。**
@@ -64,7 +64,7 @@
 ## 3. 技术栈
 
 - 后端：Python 3.12、FastAPI、SQLAlchemy 2（async）、Alembic、APScheduler、httpx、pydantic v2、pydantic-settings、loguru、uvicorn。
-- 存储：SQLite (WAL)；`sqlite+aiosqlite:///./data/llm_usability.db`。
+- 存储：SQLite (WAL)；`sqlite+aiosqlite:///./data/llm_api_probe.db`。
 - 前端：React 18 + Vite + TypeScript + Tailwind + react-router v6 + recharts + TanStack Query。
 - 包管理：`uv`（后端）+ `pnpm`（前端）。
 - 质量：ruff（lint + format）、mypy（type check）、pytest + respx（mock httpx）。
@@ -83,7 +83,7 @@ class Provider(Base):
     proxy: str | null
     enabled: bool
     interval_seconds: int                              # 默认 300
-    timeout_seconds: int                               # 默认 30
+    timeout_seconds: int                               # 默认 60
     headers_json: str                                  # 自定义 header, JSON 字符串
     created_at, updated_at
     deleted_at: datetime | null                        # 软删除标记
@@ -313,7 +313,7 @@ frontend/
 
 ### 9.1 仓库布局
 ```
-llm_usability/
+llm-api-probe/
 ├── backend/                  # FastAPI app
 │   ├── app/
 │   ├── tests/
@@ -348,7 +348,7 @@ uv run uvicorn app.main:app --host 127.0.0.1 --port 6200
 ```
 APP_HOST=127.0.0.1
 APP_PORT=6200
-DATABASE_URL=sqlite+aiosqlite:///./app/data/llm_usability.db
+DATABASE_URL=sqlite+aiosqlite:///./app/data/llm_api_probe.db
 LOG_LEVEL=INFO
 DEFAULT_INTERVAL_SECONDS=300
 DEFAULT_TIMEOUT_SECONDS=30

@@ -43,7 +43,7 @@ class ProviderCreate(BaseModel):
     proxy: str | None = None
     enabled: bool = True
     interval_seconds: int = Field(default=300, ge=10, le=86400)
-    timeout_seconds: int = Field(default=30, ge=2, le=600)
+    timeout_seconds: int = Field(default=60, ge=2, le=600)
     headers_json: str | None = None
     # Optional stable identifier. When the import payload comes from a
     # prior export, this is the same UUID the export had — preserving

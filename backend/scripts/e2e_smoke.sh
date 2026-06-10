@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # End-to-end smoke test: spin uvicorn against a throwaway SQLite, hit the
 # main API surfaces, tear everything down. Use this instead of curl-ing
-# against your real `data/llm_usability.db` so manual verification never
+# against your real `data/llm_api_probe.db` so manual verification never
 # pollutes user data.
 #
 # Usage:  bash scripts/e2e_smoke.sh

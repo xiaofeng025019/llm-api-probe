@@ -377,7 +377,7 @@ wheels = [
 ]
 
 [[package]]
-name = "llm-usability-backend"
+name = "llm-api-probe-backend"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [

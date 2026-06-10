@@ -199,7 +199,7 @@ def _set_provider_cooldown(provider_uuid: uuid.UUID, seconds: int) -> None:
 #
 #   A) Adaptive backoff: a model that succeeds N times in a row gets
 #      probed less often (1× → 2× → 4× → 8× of its base interval).
-#      A single failure resets the streak — fast detection of new
+#      A single failure halves the streak — fast detection of new
 #      problems matters more than perfectly-smooth backoff.
 #
 #   B) Idle throttling: when no SSE subscriber is connected (nobody is
@@ -214,7 +214,7 @@ def _set_provider_cooldown(provider_uuid: uuid.UUID, seconds: int) -> None:
 BACKOFF_MAX_MULTIPLIER = 8
 IDLE_MULTIPLIER = 5
 
-# Per-model success counter. Cleared on probe failure (snap to 1× tier),
+# Per-model success counter. Halved on probe failure (degraded toward 1× tier),
 # bumped on success, popped when the model is removed from active probing
 # (see sync_jobs_for_provider's cleanup at the bottom).
 _model_success_streak: dict[uuid.UUID, int] = {}

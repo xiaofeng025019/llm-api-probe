@@ -21,8 +21,8 @@ ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    APP_HOST=127.0.0.1 \
-    APP_PORT=8000
+    APP_HOST=0.0.0.0 \
+    APP_PORT=6200
 
 # uv for fast dependency installation
 RUN pip install uv
@@ -46,18 +46,17 @@ COPY --from=frontend /web/dist /app/frontend_dist
 # Ensure data dir exists at runtime
 RUN mkdir -p /app/data
 
-EXPOSE 8000
+EXPOSE 6200
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
   CMD python -c "import os,urllib.request,sys; \
-  p=os.environ.get('APP_PORT','8000'); \
+  p=os.environ.get('APP_PORT','6200'); \
   r=urllib.request.urlopen(f'http://127.0.0.1:{p}/api/v1/healthz',timeout=3); \
   sys.exit(0 if r.status==200 else 1)"
 
 # Entrypoint: shell form so APP_HOST / APP_PORT from the runtime
 # environment (e.g. docker-compose.yml setting APP_PORT=6200) actually
-# take effect. A previous CMD hardcoded --port 8000 and silently
-# ignored compose's port override, leaving the container listening on
-# the wrong port — the 127.0.0.1:6200:6200 mapping then hit nothing.
+# take effect. `--no-sync` prevents uv from trying to install dependencies
+# at container startup; the image was already synced during build.
 # See spec §A.11.
-CMD ["sh", "-c", "uv run uvicorn app.main:app --host ${APP_HOST:-0.0.0.0} --port ${APP_PORT:-8000}"]
+CMD ["sh", "-c", "uv run --no-sync uvicorn app.main:app --host ${APP_HOST:-0.0.0.0} --port ${APP_PORT:-6200}"]

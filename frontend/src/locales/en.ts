@@ -1,7 +1,7 @@
 // English locale. Add new keys here; the Chinese file must mirror the shape.
 
 const en = {
-  appName: "LLM Usability",
+  appName: "LLM API Probe",
   nav: {
     dashboard: "Dashboard",
     providers: "Providers",

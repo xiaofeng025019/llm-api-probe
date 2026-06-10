@@ -117,7 +117,7 @@ class TestStaleClassification:
             is False
         )
         """A regular model with 900s base interval: max effective is
-        900 × 40 = 36000s, threshold = 72000s. 1700s is far below
+        900 x 40 = 36000s, threshold = 72000s. 1700s is far below
         that, so still fresh. Catches the case where someone sets a
         long interval and the stale check fires too aggressively.
         """

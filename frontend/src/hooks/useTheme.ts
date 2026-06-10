@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 
 type Theme = "light" | "dark";
 
-const KEY = "llm-usability-theme";
+const KEY = "llm-api-probe-theme";
 
 function getInitial(): Theme {
   if (typeof window === "undefined") return "light";

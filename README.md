@@ -1,8 +1,6 @@
-# LLM Usability
+# LLM API Probe
 
 Local LLM API provider availability monitor. Browser dashboard for real-time status of every provider and model, with focused monitoring of your favorites and 24h / 7d / 30d trend charts.
-
-![Dashboard preview](docs/screenshots/dashboard.png)
 
 ## Highlights
 
@@ -14,7 +12,7 @@ Local LLM API provider availability monitor. Browser dashboard for real-time sta
 - **SSE event stream**: `probe.completed` / `provider.updated` / `model.updated` / `job.error` (auto-reconnect, exponential backoff)
 - **Local-first**: single SQLite file, no external services, bound to `127.0.0.1` by default
 
-> Design spec: [`docs/superpowers/specs/2026-06-03-llm-usability-design.md`](docs/superpowers/specs/2026-06-03-llm-usability-design.md)
+> Design spec: [`docs/superpowers/specs/2026-06-03-llm-api-probe-design.md`](docs/superpowers/specs/2026-06-03-llm-api-probe-design.md)
 > Architecture: [`docs/architecture.md`](docs/architecture.md)
 > API reference: [`docs/api.md`](docs/api.md)
 > Changelog: [`CHANGELOG.md`](CHANGELOG.md)
@@ -24,14 +22,14 @@ Local LLM API provider availability monitor. Browser dashboard for real-time sta
 ### Docker Compose (recommended)
 
 ```bash
-git clone <repo-url> llm-usability
-cd llm-usability
+git clone <repo-url> llm-api-probe
+cd llm-api-probe
 cp .env.example .env          # optional
 docker compose up -d
 # open http://127.0.0.1:6200
 ```
 
-Data persists in `./data/llm_usability.db`; scheduler state in the same file.
+Data persists in `./data/llm_api_probe.db`; scheduler state in the same file.
 
 ### Bare metal
 
@@ -62,18 +60,6 @@ cd frontend && pnpm dev
 # Vite at http://localhost:5173, proxies /api to :6200
 ```
 
-## Screenshots
-
-| Dashboard | Provider detail |
-| --- | --- |
-| ![Dashboard](docs/screenshots/dashboard.png) | ![Provider detail](docs/screenshots/provider.png) |
-
-| Models (favorites) | Settings |
-| --- | --- |
-| ![Models](docs/screenshots/models.png) | ![Settings](docs/screenshots/settings.png) |
-
-> Tip: drop real screenshots into `docs/screenshots/` after running locally.
-
 ## Tech stack
 
 | Layer | Stack |
@@ -87,7 +73,7 @@ cd frontend && pnpm dev
 ## Project layout
 
 ```
-llm_usability/
+llm-api-probe/
 ├── backend/             # FastAPI app
 │   ├── app/
 │   │   ├── api/         # REST endpoints
@@ -98,7 +84,7 @@ llm_usability/
 │   │   └── services/    # business logic
 │   ├── alembic/         # DB migrations
 │   ├── scripts/         # e2e smoke
-│   └── tests/           # pytest suite (67 tests)
+│   └── tests/           # pytest suite (180 tests)
 ├── frontend/            # React + Vite
 │   └── src/
 │       ├── api/         # typed fetch wrapper
@@ -150,7 +136,7 @@ See [`docs/api.md`](docs/api.md) for full request/response shapes.
 ```bash
 # Backend
 cd backend
-uv run pytest -q               # 67 tests
+uv run pytest -q               # 180 tests
 uv run ruff check
 uv run ruff format --check
 uv run mypy app
