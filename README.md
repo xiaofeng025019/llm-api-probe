@@ -1,16 +1,19 @@
 # LLM API Probe
 
-Local LLM API provider availability monitor. Browser dashboard for real-time status of every provider and model, with focused monitoring of your favorites and 24h / 7d / 30d trend charts.
+A local-first LLM API provider availability monitor. It runs scheduled probes
+against every configured provider and model, surfaces real-time status in a
+browser dashboard, prioritizes the models you pin as favorites, and tracks
+availability trends across 1h / 24h / 7d / 30d windows.
 
 ## Highlights
 
-- **Multi-provider**: OpenAI, OpenAI-compatible (DeepSeek / 硅基流动 / 豆包 / …), Anthropic, Google Gemini
-- **Active probing**: `list_models` + streaming `chat_completion`, recording status, latency, TTFB, error code
-- **Favorites**: pin the models you care about; gets a faster probe interval
-- **Trend charts**: 1h / 24h / 7d / 30d windows (Recharts)
-- **Import / Export**: JSON config with API keys + favorites, full round-trip
-- **SSE event stream**: `probe.completed` / `provider.updated` / `model.updated` / `job.error` (auto-reconnect, exponential backoff)
-- **Local-first**: single SQLite file, no external services, bound to `127.0.0.1` by default
+- **Multi-provider support**: OpenAI, OpenAI-compatible endpoints (DeepSeek, 硅基流动, 豆包, and others), Anthropic, and Google Gemini.
+- **Active probing**: scheduled calls to `list_models` followed by a streaming `chat_completion` per enabled model, recording HTTP status, latency, TTFB, and error code.
+- **Favorites**: pin the models you care about to shorten their effective probe interval and surface regressions faster.
+- **Trend charts**: availability, latency, and error rate over 1h / 24h / 7d / 30d windows, rendered with Recharts.
+- **Import / Export**: provider and favorite configuration as JSON, with API keys optional, supporting full round-trip restoration.
+- **Server-Sent Events**: live updates on `probe.completed`, `provider.updated`, `model.updated`, and `job.error`, with auto-reconnect and exponential backoff.
+- **Local-first deployment**: single SQLite file, no external services required, bound to `127.0.0.1` by default.
 
 > Design spec: [`docs/superpowers/specs/2026-06-03-llm-api-probe-design.md`](docs/superpowers/specs/2026-06-03-llm-api-probe-design.md)
 > Architecture: [`docs/architecture.md`](docs/architecture.md)
@@ -72,7 +75,10 @@ cd frontend && pnpm dev
 
 ## Project layout
 
-```
+The repository is organized into a Python backend, a TypeScript frontend, and
+shared documentation and configuration at the root.
+
+```text
 llm-api-probe/
 ├── backend/             # FastAPI app
 │   ├── app/
@@ -106,28 +112,29 @@ llm-api-probe/
 
 ## Configuration
 
-All config comes from `.env` (template: `.env.example`). Runtime-tunable values
-(`retention_days`, `max_concurrency`, favorite / regular model intervals) live in
-the `settings` table and are editable from the **Settings** page.
+Configuration is split into two layers:
+
+- **Bootstrap config** in `.env` (template: `.env.example`) — host, port, database URL, log level, and other values read once at process start. The full set of keys is documented in `.env.example`.
+- **Runtime-tunable values** in the `settings` table — `retention_days`, `max_concurrency`, favorite and regular model probe intervals, the adaptive-backoff and idle-throttling toggles, and similar. These are editable from the **Settings** page without restarting the process.
 
 ## API overview
 
 All endpoints under `/api/v1`. Response envelope: `{data, error}`.
 
 | Method | Path | Notes |
-| --- | --- |
-| `GET`    | `/healthz` / `/readyz` | liveness / readiness |
-| `GET`    | `/dashboard` | aggregated overview |
+| --- | --- | --- |
+| `GET` | `/healthz` / `/readyz` | liveness / readiness |
+| `GET` | `/dashboard` | aggregated overview |
 | `GET/POST/PATCH/DELETE` | `/providers[/{id}]` | provider CRUD |
-| `POST`   | `/providers/{id}/sync-models` | manual model list refresh |
-| `POST`   | `/providers/{id}/run` | immediate probe |
-| `GET`    | `/providers/{id}/models` | list models for a provider |
-| `PATCH`  | `/models/{id}` | toggle enabled / favorite |
-| `GET`    | `/results?provider_id&model_id&hours&limit` | probe history |
+| `POST` | `/providers/{id}/sync-models` | manual model list refresh |
+| `POST` | `/providers/{id}/run` | immediate probe |
+| `GET` | `/providers/{id}/models` | list models for a provider |
+| `PATCH` | `/models/{id}` | toggle enabled / favorite |
+| `GET` | `/results?provider_id&model_id&hours&limit` | probe history |
 | `GET/PUT` | `/settings` | global config |
-| `POST`   | `/import` / `/export` | config backup + restore |
-| `POST`   | `/probe/run?provider_id&model_id` | trigger probe |
-| `GET`    | `/events` | **SSE** event stream |
+| `POST` | `/import` / `/export` | config backup + restore |
+| `POST` | `/probe/run?provider_id&model_id` | trigger probe |
+| `GET` | `/events` | **SSE** event stream |
 
 See [`docs/api.md`](docs/api.md) for full request/response shapes.
 
